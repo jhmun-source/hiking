@@ -99,6 +99,24 @@
   .wp-icon.start { background: #2f6b3f; }
   .wp-icon.end { background: #1d3557; }
   .leaflet-control-attribution { font-size: 9px; }
+
+  /* 지도 사진 맞추기 */
+  .georef { position: fixed; inset: 0; z-index: 3000; background: var(--bg); display: flex; flex-direction: column; }
+  .georef[hidden], .map-banner[hidden] { display: none; }
+  .georef-bar { display: flex; align-items: center; gap: 8px; padding: calc(env(safe-area-inset-top) + 10px) 12px 10px; background: var(--panel); box-shadow: var(--shadow); }
+  .georef-bar span:first-child { flex: 1; font-weight: 600; }
+  .georef-bar button, .map-banner button { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+  .georef-zoom { display: flex; gap: 4px; }
+  .georef-zoom button { width: 40px; padding: 8px 0; }
+  .georef-view { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
+  .georef-inner { position: relative; display: inline-block; }
+  .georef-inner img { display: block; width: 100%; }
+  .georef-pin { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: var(--route); border: 2px solid #fff;
+                color: #fff; font: 600 11px system-ui; display: grid; place-items: center; box-shadow: 0 1px 3px rgba(0,0,0,.5); pointer-events: none; }
+  .map-banner { position: fixed; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 10px); z-index: 2500; background: var(--accent); color: #fff;
+                border-radius: 12px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; box-shadow: var(--shadow); font-weight: 600; }
+  .map-banner span { flex: 1; }
+  .photo-img { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; max-width: none; }
   .leaflet-bottom { bottom: 96px; }
 
   /* 넓은 화면: 시트를 왼쪽 패널로 */
@@ -150,7 +168,7 @@
   <div class="body">
     <div class="tabs">
       <button data-tab="course" class="on">코스</button>
-      <button data-tab="saved">저장된 코스</button>
+      <button data-tab="saved">저장·불러오기</button>
       <button data-tab="settings">설정</button>
     </div>
 
@@ -178,13 +196,35 @@
     </div>
 
     <div class="pane" data-pane="saved">
+      <h2>저장된 코스</h2>
       <ul class="list" id="savedList"></ul>
-      <div class="row">
+
+      <h2>GPX 불러오기</h2>
+      <div class="row" style="margin-top:0">
         <button class="btn" id="importBtn">GPX 파일 불러오기</button>
         <input type="file" id="importFile" accept=".gpx,application/gpx+xml,application/xml,text/xml" hidden>
       </div>
-      <p class="hint">불러온 GPX는 주황색 점선으로 표시돼요. 참고하면서 위에 새 코스를 그릴 수 있어요.</p>
       <div id="importInfo" class="hint"></div>
+      <div class="row" id="importActions" hidden>
+        <button class="btn primary" id="importUse">이 GPX를 코스로 쓰기</button>
+        <button class="btn" id="importDrop">지우기</button>
+      </div>
+      <p class="hint">"코스로 쓰기"를 누르면 그대로 저장하거나 워치로 보낼 수 있어요. 누르지 않으면 주황 점선으로만 깔려서 그 위에 새 코스를 따라 그릴 수 있어요.</p>
+
+      <h2>지도 사진 겹치기</h2>
+      <div class="row" style="margin-top:0">
+        <button class="btn" id="photoBtn">지도 사진 불러오기</button>
+        <input type="file" id="photoFile" accept="image/*" hidden>
+      </div>
+      <div id="photoCtl" hidden>
+        <label class="chk" style="margin-top:6px">투명도 <input type="range" id="photoOpacity" min="10" max="100" value="60" style="flex:1"></label>
+        <div class="row" style="margin-top:0">
+          <button class="btn" id="photoRealign">위치 다시 맞추기</button>
+          <button class="btn" id="photoHide">숨기기</button>
+          <button class="btn" id="photoDrop">사진 지우기</button>
+        </div>
+      </div>
+      <p class="hint">안내판 사진이나 코스 지도 캡처를 지도에 겹쳐요. 사진과 지도에서 같은 곳(봉우리, 갈림길 등)을 두 번씩 찍으면 위치가 맞춰져요. 서로 멀리 떨어진 두 곳을 고를수록 정확해요.</p>
     </div>
 
     <div class="pane" data-pane="settings">
@@ -210,6 +250,16 @@
     </div>
   </div>
 </div>
+
+<div class="georef" id="georef" hidden>
+  <div class="georef-bar">
+    <span id="georefMsg">사진에서 첫 번째 기준점을 누르세요</span>
+    <span class="georef-zoom"><button id="gzOut">−</button><button id="gzIn">+</button></span>
+    <button id="georefCancel">취소</button>
+  </div>
+  <div class="georef-view" id="georefView"><div class="georef-inner" id="georefInner"><img id="georefImg" alt="불러온 지도 사진"></div></div>
+</div>
+<div class="map-banner" id="mapBanner" hidden><span id="mapBannerMsg"></span><button id="mapBannerCancel">취소</button></div>
 
 <div class="toast" id="toast"></div>
 
@@ -307,7 +357,7 @@ function refreshList() {
     li.innerHTML = `<span class="n"></span><span class="name"></span><span class="mode"></span><button>삭제</button>`;
     li.querySelector('.n').textContent = label;
     li.querySelector('.name').textContent = wp.name || `${wp.lat.toFixed(5)}, ${wp.lng.toFixed(5)}`;
-    li.querySelector('.mode').textContent = seg ? (seg.mode === 'auto' ? '등산로' : '직선') + (seg.error ? ' ⚠' : '') : '';
+    li.querySelector('.mode').textContent = seg ? ({ auto: '등산로', line: '직선', fixed: 'GPX' }[seg.mode]) + (seg.error ? ' ⚠' : '') : '';
     li.querySelector('.name').onclick = () => map.panTo([wp.lat, wp.lng]);
     li.querySelector('button').onclick = () => removeWaypoint(i);
     ul.appendChild(li);
@@ -322,6 +372,15 @@ async function computeSegment(si) {
   if (!seg || !a || !b) return;
   seg.error = null;
   if (seg.mode === 'line') { seg.coords = [[a.lat, a.lng, null], [b.lat, b.lng, null]]; render(); return; }
+  // 가져온 GPX 구간: 모양은 그대로 두고 옮긴 끝점만 반영
+  if (seg.mode === 'fixed') {
+    if (seg.coords.length >= 2) {
+      seg.coords[0] = [a.lat, a.lng, seg.coords[0][2]];
+      seg.coords[seg.coords.length - 1] = [b.lat, b.lng, seg.coords.at(-1)[2]];
+      render(); return;
+    }
+    seg.mode = 'auto';
+  }
   const token = ++reqSeq; seg.token = token; seg.pending = true;
   seg.coords = [[a.lat, a.lng, null], [b.lat, b.lng, null]];
   render(); setStatus('경로 탐색 중…');
@@ -579,7 +638,10 @@ async function searchVworld(q) {
 map.on('movestart', () => { if ($('results').children.length) $('results').innerHTML = ''; });
 
 // ---------- map controls ----------
-map.on('click', (e) => { if (editing) addWaypoint(e.latlng.lat, e.latlng.lng); });
+map.on('click', (e) => {
+  if (georef) { if (!$('mapBanner').hidden) georefMapClick(e.latlng); return; }
+  if (editing) addWaypoint(e.latlng.lat, e.latlng.lng);
+});
 $('editBtn').onclick = () => {
   editing = !editing; $('editBtn').classList.toggle('on', editing);
   toast(editing ? '지도를 누르면 지점이 추가돼요' : '지점 추가 꺼짐 (지도만 보기)');
@@ -718,15 +780,165 @@ $('importFile').onchange = async (e) => {
     const ele = n.getElementsByTagName('ele')[0];
     return [+n.getAttribute('lat'), +n.getAttribute('lon'), ele ? +ele.textContent : null];
   }).filter(p => isFinite(p[0]) && isFinite(p[1]));
-  if (pts.length < 2) { $('importInfo').textContent = '트랙 점을 찾지 못했어요.'; return; }
+  e.target.value = '';
+  if (pts.length < 2) { $('importInfo').textContent = '트랙 점을 찾지 못했어요.'; $('importActions').hidden = true; return; }
   if (refLayer) map.removeLayer(refLayer);
   refTrack = pts;
+  const trkName = doc.querySelector('trk > name, metadata > name')?.textContent.trim();
+  refName = trkName || f.name.replace(/\.gpx$/i, '');
   refLayer = L.polyline(pts.map(p => [p[0], p[1]]), { color: css('--ref'), weight: 4, dashArray: '6 6', opacity: 0.9 }).addTo(map);
   map.fitBounds(refLayer.getBounds(), { padding: [30, 30] });
   const s = trackStats(pts);
-  $('importInfo').textContent = `불러옴: ${f.name} · ${(s.dist / 1000).toFixed(2)} km · 오르막 ${Math.round(s.up)} m`;
-  render(); e.target.value = '';
+  $('importInfo').textContent = `불러옴: ${refName} · ${(s.dist / 1000).toFixed(2)} km · 오르막 ${Math.round(s.up)} m`;
+  $('importActions').hidden = false;
+  render();
 };
+let refName = '';
+function dropRef() {
+  if (refLayer) map.removeLayer(refLayer);
+  refLayer = null; refTrack = null;
+  $('importInfo').textContent = ''; $('importActions').hidden = true;
+  render();
+}
+$('importDrop').onclick = dropRef;
+// 불러온 트랙을 편집 가능한 코스로: 출발·도착 두 지점과 모양을 그대로 유지하는 'fixed' 구간 하나
+$('importUse').onclick = () => {
+  if (!refTrack) return;
+  if (waypoints.length && !confirm('지금 그리던 코스를 지우고 불러온 GPX로 바꿀까요?')) return;
+  const pts = refTrack, name = refName;
+  clearRoute(); dropRef();
+  [pts[0], pts.at(-1)].forEach((p, i) => {
+    const wp = { lat: p[0], lng: p[1], name: i ? '도착' : '출발' };
+    createMarker(wp); waypoints.push(wp);
+  });
+  segments.push({ mode: 'fixed', coords: pts.map(p => p.slice()) });
+  $('routeName').value = name;
+  refreshMarkers(); refreshList(); render();
+  map.fitBounds(L.featureGroup(routeLayer.getLayers()).getBounds(), { padding: [40, 40] });
+  openTab('course');
+  toast('불러온 GPX를 코스로 바꿨어요. 저장하거나 워치로 보낼 수 있어요.');
+};
+
+// ---------- 지도 사진 겹치기 ----------
+// 사진 픽셀 → 지도(웹 메르카토르 m) 변환을 두 기준점으로 구함 (확대·회전·이동만, 복소수 z = a·q + b)
+const photoPane = map.createPane('photo');
+photoPane.style.zIndex = 350; // 배경 지도(200) 위, 경로 선(400) 아래
+let photo = null; // { src, w, h, a:[re,im], b:[re,im], opacity, hidden }
+let photoEl = null;
+const proj = L.CRS.EPSG3857;
+
+function photoToLatLng(px, py) {
+  const [ar, ai] = photo.a, [br, bi] = photo.b;
+  const qx = px, qy = -py; // 사진은 y가 아래로, 지도는 위로
+  return proj.unproject(L.point(ar * qx - ai * qy + br, ai * qx + ar * qy + bi));
+}
+function updatePhoto() {
+  if (!photoEl) return;
+  const { w, h } = photo;
+  const p0 = map.latLngToLayerPoint(photoToLatLng(0, 0));
+  const px = map.latLngToLayerPoint(photoToLatLng(w, 0));
+  const py = map.latLngToLayerPoint(photoToLatLng(0, h));
+  const m = [(px.x - p0.x) / w, (px.y - p0.y) / w, (py.x - p0.x) / h, (py.y - p0.y) / h, p0.x, p0.y];
+  photoEl.style.transform = `matrix(${m.join(',')})`;
+}
+function showPhoto() {
+  if (photoEl) photoEl.remove();
+  photoEl = null;
+  $('photoCtl').hidden = !photo;
+  if (!photo || !photo.a) return;
+  photoEl = document.createElement('img');
+  photoEl.className = 'photo-img';
+  photoEl.src = photo.src; photoEl.width = photo.w; photoEl.height = photo.h;
+  photoEl.style.opacity = photo.opacity;
+  photoEl.hidden = !!photo.hidden;
+  photoPane.appendChild(photoEl);
+  $('photoOpacity').value = Math.round(photo.opacity * 100);
+  $('photoHide').textContent = photo.hidden ? '보이기' : '숨기기';
+  updatePhoto();
+}
+map.on('zoomstart', () => { if (photoEl) photoEl.style.visibility = 'hidden'; });
+map.on('zoomend viewreset', () => { updatePhoto(); if (photoEl) photoEl.style.visibility = ''; });
+function savePhoto() {
+  if (!photo) { store.set('photo', ''); return; }
+  if (!store.set('photo', JSON.stringify(photo))) toast('사진이 커서 이 기기에 저장하지 못했어요. 앱을 닫으면 사라져요.');
+}
+
+// 사진을 최대 2000px JPEG로 줄여서 저장 공간 절약
+$('photoBtn').onclick = () => $('photoFile').click();
+$('photoFile').onchange = (e) => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    const k = Math.min(1, 2000 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(img.src);
+    startGeoref({ src: c.toDataURL('image/jpeg', 0.85), w: c.width, h: c.height, opacity: 0.6 });
+  };
+  img.onerror = () => toast('사진을 열지 못했어요');
+  img.src = URL.createObjectURL(f);
+};
+
+// 맞추기 단계: 사진 점1 → 지도 점1 → 사진 점2 → 지도 점2
+let georef = null; // { draft, imgPts:[], mapPts:[], step }
+let gZoom = 1;
+function startGeoref(draft) {
+  georef = { draft, imgPts: [], mapPts: [] };
+  $('georefImg').src = draft.src;
+  gZoom = 1; $('georefInner').style.width = '100%';
+  georefImageStep();
+}
+function georefImageStep() {
+  const n = georef.imgPts.length;
+  $('georefMsg').textContent = `사진에서 ${n ? '두 번째' : '첫 번째'} 기준점을 누르세요`;
+  [...$('georefInner').querySelectorAll('.georef-pin')].forEach(p => p.remove());
+  georef.imgPts.forEach((p, i) => {
+    const pin = document.createElement('div');
+    pin.className = 'georef-pin'; pin.textContent = i + 1;
+    pin.style.left = (p[0] / georef.draft.w * 100) + '%'; pin.style.top = (p[1] / georef.draft.h * 100) + '%';
+    $('georefInner').appendChild(pin);
+  });
+  $('georef').hidden = false; $('mapBanner').hidden = true;
+}
+function georefMapStep() {
+  $('georef').hidden = true;
+  sheet.classList.remove('open'); // 폰에서 지도를 가리지 않게
+  $('mapBannerMsg').textContent = `지도에서 사진의 ${georef.mapPts.length + 1}번 지점과 같은 곳을 누르세요`;
+  $('mapBanner').hidden = false;
+}
+function endGeoref() { georef = null; $('georef').hidden = true; $('mapBanner').hidden = true; }
+$('georefImg').onclick = (e) => {
+  if (!georef) return;
+  const r = e.target.getBoundingClientRect();
+  const p = [(e.clientX - r.left) / r.width * georef.draft.w, (e.clientY - r.top) / r.height * georef.draft.h];
+  georef.imgPts.push(p);
+  georefMapStep();
+};
+function georefMapClick(latlng) {
+  georef.mapPts.push(proj.project(latlng));
+  if (georef.mapPts.length < 2) { georefImageStep(); return; }
+  const [p1, p2] = georef.imgPts, [m1, m2] = georef.mapPts;
+  const q1 = [p1[0], -p1[1]], q2 = [p2[0], -p2[1]];
+  const dq = [q2[0] - q1[0], q2[1] - q1[1]], dm = [m2.x - m1.x, m2.y - m1.y];
+  const den = dq[0] ** 2 + dq[1] ** 2;
+  if (den < 1 || dm[0] ** 2 + dm[1] ** 2 < 1) { toast('두 기준점이 너무 가까워요. 서로 떨어진 곳을 골라 주세요.'); georef.imgPts = []; georef.mapPts = []; georefImageStep(); return; }
+  const a = [(dm[0] * dq[0] + dm[1] * dq[1]) / den, (dm[1] * dq[0] - dm[0] * dq[1]) / den];
+  const b = [m1.x - (a[0] * q1[0] - a[1] * q1[1]), m1.y - (a[1] * q1[0] + a[0] * q1[1])];
+  photo = { ...georef.draft, a, b, hidden: false };
+  endGeoref(); showPhoto(); savePhoto();
+  toast('사진을 지도에 겹쳤어요. 투명도는 저장·불러오기 탭에서 바꿀 수 있어요.');
+}
+$('georefCancel').onclick = () => { endGeoref(); };
+$('mapBannerCancel').onclick = () => { endGeoref(); };
+$('gzIn').onclick = () => { gZoom = Math.min(gZoom * 1.6, 8); $('georefInner').style.width = gZoom * 100 + '%'; };
+$('gzOut').onclick = () => { gZoom = Math.max(gZoom / 1.6, 1); $('georefInner').style.width = gZoom * 100 + '%'; };
+$('photoOpacity').oninput = (e) => { if (!photo) return; photo.opacity = e.target.value / 100; if (photoEl) photoEl.style.opacity = photo.opacity; };
+$('photoOpacity').onchange = savePhoto;
+$('photoHide').onclick = () => { if (!photo) return; photo.hidden = !photo.hidden; showPhoto(); savePhoto(); };
+$('photoRealign').onclick = () => { if (photo) startGeoref({ src: photo.src, w: photo.w, h: photo.h, opacity: photo.opacity }); };
+$('photoDrop').onclick = () => { if (photo && confirm('겹친 사진을 지울까요?')) { photo = null; showPhoto(); savePhoto(); } };
+try { const sp = store.get('photo'); if (sp) { photo = JSON.parse(sp); showPhoto(); } } catch {}
 
 // ---------- saved courses (이 기기에 저장) ----------
 function loadSaved() { try { return JSON.parse(store.get('courses') || '[]'); } catch { return []; } }
