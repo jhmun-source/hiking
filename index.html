@@ -217,6 +217,7 @@
         <input type="file" id="photoFile" accept="image/*" hidden>
       </div>
       <div id="photoCtl" hidden>
+        <div class="row"><button class="btn primary" id="extractBtn">사진 속 코스 선 자동으로 따라 그리기</button></div>
         <label class="chk" style="margin-top:6px">투명도 <input type="range" id="photoOpacity" min="10" max="100" value="60" style="flex:1"></label>
         <div class="row" style="margin-top:0">
           <button class="btn" id="photoRealign">위치 다시 맞추기</button>
@@ -225,6 +226,7 @@
         </div>
       </div>
       <p class="hint">안내판 사진이나 코스 지도 캡처를 지도에 겹쳐요. 사진과 지도에서 같은 곳(봉우리, 갈림길 등)을 두 번씩 찍으면 위치가 맞춰져요. 서로 멀리 떨어진 두 곳을 고를수록 정확해요.</p>
+      <p class="hint">자동 따라 그리기: 사진에서 코스 선의 시작 → (중간) → 끝을 순서대로 누르면, 그 선을 따라 지점을 찍고 등산로에 맞춰 이어요. 선 색이 바뀌는 곳, 갈림길, 왕복 코스의 반환점은 중간 지점으로 눌러 주세요.</p>
     </div>
 
     <div class="pane" data-pane="settings">
@@ -255,6 +257,7 @@
   <div class="georef-bar">
     <span id="georefMsg">사진에서 첫 번째 기준점을 누르세요</span>
     <span class="georef-zoom"><button id="gzOut">−</button><button id="gzIn">+</button></span>
+    <button id="georefDone" hidden>완료</button>
     <button id="georefCancel">취소</button>
   </div>
   <div class="georef-view" id="georefView"><div class="georef-inner" id="georefInner"><img id="georefImg" alt="불러온 지도 사진"></div></div>
@@ -366,6 +369,33 @@ function refreshList() {
 
 // ---------- routing ----------
 let reqSeq = 0;
+// 공용 경로 서버(brouter.de)를 아껴 쓰기: 동시 요청 2개로 제한, 같은 요청은 재사용,
+// "잠시 후 다시" 응답(403/429/503)이면 잠깐 쉬었다가 재시도
+let activeReq = 0; const reqQueue = [];
+function limited(fn) {
+  return new Promise((resolve, reject) => {
+    const run = () => { activeReq++; fn().then(resolve, reject).finally(() => { activeReq--; if (reqQueue.length) reqQueue.shift()(); }); };
+    activeReq < 2 ? run() : reqQueue.push(run);
+  });
+}
+const routeCache = new Map();
+// pts: [[lat,lng], ...] (2개 이상) → 그 점들을 차례로 지나는 등산로 경로 [[lat,lng,ele], ...]
+async function brouter(pts) {
+  const lonlats = pts.map(p => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join('|');
+  if (routeCache.has(lonlats)) return routeCache.get(lonlats).map(c => c.slice());
+  const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=hiking-mountain&alternativeidx=0&format=geojson`;
+  for (let attempt = 0; ; attempt++) {
+    const { status, txt } = await limited(async () => { const r = await fetch(url); return { status: r.status, txt: await r.text() }; });
+    if (status === 200 && txt.trim()[0] === '{') {
+      const coords = JSON.parse(txt).features[0].geometry.coordinates.map(c => [c[1], c[0], c[2] ?? null]);
+      routeCache.set(lonlats, coords);
+      return coords.map(c => c.slice());
+    }
+    if (![403, 429, 503].includes(status) || attempt >= 3) throw new Error(txt.slice(0, 120));
+    setStatus('경로 서버가 바빠서 잠시 기다리는 중…');
+    await new Promise(r => setTimeout(r, 2000 * 2 ** attempt));
+  }
+}
 async function computeSegment(si) {
   const seg = segments[si];
   const a = waypoints[si], b = waypoints[si + 1];
@@ -385,20 +415,18 @@ async function computeSegment(si) {
   seg.coords = [[a.lat, a.lng, null], [b.lat, b.lng, null]];
   render(); setStatus('경로 탐색 중…');
   try {
-    const url = `https://brouter.de/brouter?lonlats=${a.lng},${a.lat}|${b.lng},${b.lat}&profile=hiking-mountain&alternativeidx=0&format=geojson`;
-    const res = await fetch(url);
-    const txt = await res.text();
-    if (!res.ok || txt.trim()[0] !== '{') throw new Error(txt.slice(0, 120));
-    const gj = JSON.parse(txt);
+    const coords = await brouter([[a.lat, a.lng], [b.lat, b.lng]]);
     if (seg.token !== token) return;
-    seg.coords = gj.features[0].geometry.coordinates.map(c => [c[1], c[0], c[2] ?? null]);
+    seg.coords = coords;
     const gapA = haversine(a.lat, a.lng, seg.coords[0][0], seg.coords[0][1]);
     const gapB = haversine(b.lat, b.lng, seg.coords.at(-1)[0], seg.coords.at(-1)[1]);
     if (gapA > 150 || gapB > 150) seg.error = '찍은 지점 근처에 등산로가 없어요';
     setStatus(seg.error || '', !!seg.error);
   } catch (e) {
     if (seg.token !== token) return;
-    seg.error = navigator.onLine ? '경로를 찾지 못했어요. 직선으로 표시해요.' : '인터넷이 끊겨 직선으로 표시해요.';
+    seg.error = !navigator.onLine ? '인터넷이 끊겨 직선으로 표시해요.'
+      : /retry/i.test(e.message) ? '경로 서버가 바빠서 직선으로 표시했어요. 잠시 후 지점을 살짝 옮기면 다시 찾아요.'
+      : '경로를 찾지 못했어요. 직선으로 표시해요.';
     setStatus(seg.error, true);
   }
   seg.pending = false;
@@ -892,14 +920,18 @@ function startGeoref(draft) {
 function georefImageStep() {
   const n = georef.imgPts.length;
   $('georefMsg').textContent = `사진에서 ${n ? '두 번째' : '첫 번째'} 기준점을 누르세요`;
+  drawPins(georef.imgPts, georef.draft.w, georef.draft.h);
+  $('georefDone').hidden = true;
+  $('georef').hidden = false; $('mapBanner').hidden = true;
+}
+function drawPins(pts, w, h) {
   [...$('georefInner').querySelectorAll('.georef-pin')].forEach(p => p.remove());
-  georef.imgPts.forEach((p, i) => {
+  pts.forEach((p, i) => {
     const pin = document.createElement('div');
     pin.className = 'georef-pin'; pin.textContent = i + 1;
-    pin.style.left = (p[0] / georef.draft.w * 100) + '%'; pin.style.top = (p[1] / georef.draft.h * 100) + '%';
+    pin.style.left = (p[0] / w * 100) + '%'; pin.style.top = (p[1] / h * 100) + '%';
     $('georefInner').appendChild(pin);
   });
-  $('georef').hidden = false; $('mapBanner').hidden = true;
 }
 function georefMapStep() {
   $('georef').hidden = true;
@@ -909,8 +941,12 @@ function georefMapStep() {
 }
 function endGeoref() { georef = null; $('georef').hidden = true; $('mapBanner').hidden = true; }
 $('georefImg').onclick = (e) => {
-  if (!georef) return;
   const r = e.target.getBoundingClientRect();
+  if (extract) {
+    extract.taps.push([(e.clientX - r.left) / r.width * photo.w, (e.clientY - r.top) / r.height * photo.h]);
+    extractStep(); return;
+  }
+  if (!georef) return;
   const p = [(e.clientX - r.left) / r.width * georef.draft.w, (e.clientY - r.top) / r.height * georef.draft.h];
   georef.imgPts.push(p);
   georefMapStep();
@@ -929,7 +965,7 @@ function georefMapClick(latlng) {
   endGeoref(); showPhoto(); savePhoto();
   toast('사진을 지도에 겹쳤어요. 투명도는 저장·불러오기 탭에서 바꿀 수 있어요.');
 }
-$('georefCancel').onclick = () => { endGeoref(); };
+$('georefCancel').onclick = () => { if (extract) endExtract(); else endGeoref(); };
 $('mapBannerCancel').onclick = () => { endGeoref(); };
 $('gzIn').onclick = () => { gZoom = Math.min(gZoom * 1.6, 8); $('georefInner').style.width = gZoom * 100 + '%'; };
 $('gzOut').onclick = () => { gZoom = Math.max(gZoom / 1.6, 1); $('georefInner').style.width = gZoom * 100 + '%'; };
@@ -937,8 +973,294 @@ $('photoOpacity').oninput = (e) => { if (!photo) return; photo.opacity = e.targe
 $('photoOpacity').onchange = savePhoto;
 $('photoHide').onclick = () => { if (!photo) return; photo.hidden = !photo.hidden; showPhoto(); savePhoto(); };
 $('photoRealign').onclick = () => { if (photo) startGeoref({ src: photo.src, w: photo.w, h: photo.h, opacity: photo.opacity }); };
-$('photoDrop').onclick = () => { if (photo && confirm('겹친 사진을 지울까요?')) { photo = null; showPhoto(); savePhoto(); } };
+$('photoDrop').onclick = () => {
+  if (!photo || !confirm('겹친 사진을 지울까요?')) return;
+  photo = null; showPhoto(); savePhoto();
+  if (extractLayer) { map.removeLayer(extractLayer); extractLayer = null; }
+};
 try { const sp = store.get('photo'); if (sp) { photo = JSON.parse(sp); showPhoto(); } } catch {}
+
+// ---------- 사진 속 코스 선 자동 따라 그리기 ----------
+// 1) 누른 점마다 선 색을 읽고  2) 그 색 픽셀을 가로지르는 최단 경로로 점과 점 사이 선을 따라가고
+// 3) 그 선을 지도 좌표로 바꿔 일정 간격으로 지점을 찍으면  4) 각 구간은 등산로 따라 연결됨
+let extract = null; // { taps: [[x,y] 사진 픽셀] }
+let extractLayer = null;
+$('extractBtn').onclick = () => {
+  if (!photo?.a) return;
+  extract = { taps: [] };
+  $('georefImg').src = photo.src;
+  gZoom = 1; $('georefInner').style.width = '100%';
+  $('georefDone').hidden = false;
+  extractStep();
+  $('georef').hidden = false;
+};
+function extractStep() {
+  const n = extract.taps.length;
+  $('georefMsg').textContent = n === 0 ? '코스 선의 시작 부분을 누르세요'
+    : n === 1 ? '같은 선의 끝 부분을 누르세요 (갈림길·색이 바뀌는 곳은 중간에 먼저)'
+    : `${n}개 지점 · 더 누르면 이어서 추가, 다 됐으면 완료`;
+  $('georefDone').disabled = n < 2;
+  drawPins(extract.taps, photo.w, photo.h);
+}
+function endExtract() { extract = null; $('georef').hidden = true; $('georefDone').hidden = true; }
+$('georefDone').onclick = () => { if (extract && extract.taps.length >= 2) runExtract(extract.taps.slice()); };
+
+function loadImage(src) {
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+}
+
+async function runExtract(taps) {
+  $('georefMsg').textContent = '선을 찾는 중…'; $('georefDone').disabled = true;
+  await new Promise(r => setTimeout(r, 30));
+  const { w: W, h: H } = photo;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(await loadImage(photo.src), 0, 0, W, H);
+  const px = ctx.getImageData(0, 0, W, H).data;
+
+  // 누른 곳 주변(반경 10px)에서 가장 채도가 높은 색 = 선 색
+  const colorAt = ([x0, y0]) => {
+    let best = null, bestSat = -1, bx = x0, by = y0;
+    for (let y = Math.max(0, Math.round(y0) - 10); y <= Math.min(H - 1, Math.round(y0) + 10); y++)
+      for (let x = Math.max(0, Math.round(x0) - 10); x <= Math.min(W - 1, Math.round(x0) + 10); x++) {
+        if ((x - x0) ** 2 + (y - y0) ** 2 > 100) continue;
+        const i = (y * W + x) * 4, r = px[i], g = px[i + 1], b = px[i + 2];
+        const sat = Math.max(r, g, b) - Math.min(r, g, b);
+        if (sat > bestSat) { bestSat = sat; best = [r, g, b]; bx = x; by = y; }
+      }
+    return { rgb: best, sat: bestSat, at: [bx, by] };
+  };
+  const picks = taps.map(colorAt);
+  if (picks.some(p => p.sat < 40)) toast('회색·검은 선은 다른 글씨와 섞여서 결과가 부정확할 수 있어요');
+
+  // 같은 색끼리 묶기 (선 색 종류마다 마스크 하나)
+  const palette = [];
+  const colorIdx = picks.map(p => {
+    let k = palette.findIndex(q => (q[0] - p.rgb[0]) ** 2 + (q[1] - p.rgb[1]) ** 2 + (q[2] - p.rgb[2]) ** 2 < 40 ** 2);
+    if (k < 0) { palette.push(p.rgb); k = palette.length - 1; }
+    return k;
+  });
+
+  // 계산량을 줄이려고 최대 700칸 격자로 축소 (칸 안에 선 픽셀이 하나라도 있으면 선)
+  const f = Math.min(1, 700 / Math.max(W, H));
+  const gw = Math.ceil(W * f), gh = Math.ceil(H * f), N = gw * gh;
+  const masks = palette.map(() => new Uint8Array(N));
+  const TH2 = 65 ** 2;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4, r = px[i], g = px[i + 1], b = px[i + 2];
+    for (let k = 0; k < palette.length; k++) {
+      const q = palette[k];
+      if ((r - q[0]) ** 2 + (g - q[1]) ** 2 + (b - q[2]) ** 2 < TH2) masks[k][Math.floor(y * f) * gw + Math.floor(x * f)] = 1;
+    }
+  }
+  // 한 칸 두께로 살짝 넓혀서 작은 끊김을 메움
+  const grown = masks.map(m => {
+    const o = m.slice();
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) if (m[y * gw + x])
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const X = x + dx, Y = y + dy; if (X >= 0 && Y >= 0 && X < gw && Y < gh) o[Y * gw + X] = 1;
+      }
+    return o;
+  });
+
+  // 누른 점을 가장 가까운 선 칸으로 붙임
+  const snap = (p, mask) => {
+    const gx = Math.round(p.at[0] * f), gy = Math.round(p.at[1] * f);
+    for (let r = 0; r <= 15; r++)
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const X = gx + dx, Y = gy + dy;
+        if (X >= 0 && Y >= 0 && X < gw && Y < gh && mask[Y * gw + X]) return Y * gw + X;
+      }
+    return -1;
+  };
+
+  // 두 점 사이 최단 경로 (선 칸 비용 1, 선 밖은 OFF → 선을 따라가되 짧은 끊김은 건너뜀)
+  // A* (직선거리 휴리스틱) + 타입 배열 힙: 폰에서도 메모리·시간을 적게 씀
+  const OFF = 25;
+  const dist = new Float32Array(N), prev = new Int32Array(N), closed = new Uint8Array(N);
+  let hk = new Float64Array(1 << 16), hv = new Int32Array(1 << 16), hn = 0;
+  const push = (k, v) => {
+    if (hn === hk.length) { const k2 = new Float64Array(hn * 2); k2.set(hk); hk = k2; const v2 = new Int32Array(hn * 2); v2.set(hv); hv = v2; }
+    let i = hn++;
+    while (i > 0) { const p = (i - 1) >> 1; if (hk[p] <= k) break; hk[i] = hk[p]; hv[i] = hv[p]; i = p; }
+    hk[i] = k; hv[i] = v;
+  };
+  const pop = () => {
+    const v = hv[0], k = hk[--hn], last = hv[hn];
+    let i = 0;
+    for (;;) { let c = 2 * i + 1; if (c >= hn) break; if (c + 1 < hn && hk[c + 1] < hk[c]) c++; if (hk[c] >= k) break; hk[i] = hk[c]; hv[i] = hv[c]; i = c; }
+    hk[i] = k; hv[i] = last;
+    return v;
+  };
+  const trace = (s, t, mask) => {
+    dist.fill(Infinity); prev.fill(-1); closed.fill(0); hn = 0;
+    const tx = t % gw, ty = (t - tx) / gw;
+    const h = (v) => { const x = v % gw, y = (v - x) / gw; return Math.hypot(x - tx, y - ty); };
+    dist[s] = 0; push(h(s), s);
+    while (hn) {
+      const u = pop();
+      if (closed[u]) continue;
+      closed[u] = 1;
+      if (u === t) break;
+      const ux = u % gw, uy = (u - ux) / gw, du = dist[u];
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const X = ux + dx, Y = uy + dy; if (X < 0 || Y < 0 || X >= gw || Y >= gh) continue;
+        const v = Y * gw + X; if (closed[v]) continue;
+        const nd = du + (mask[v] ? 1 : OFF) * (dx && dy ? 1.4142 : 1);
+        if (nd < dist[v]) { dist[v] = nd; prev[v] = u; push(nd + h(v), v); }
+      }
+    }
+    if (!closed[t]) return null;
+    const out = []; for (let v = t; v !== -1; v = prev[v]) out.push(v);
+    return out.reverse();
+  };
+
+  const cells = []; let offLine = 0;
+  const tapIdx = [0]; // 누른 점들이 선(cells)의 몇 번째 칸인지
+  const segMask = new Uint8Array(N);
+  for (let i = 0; i < taps.length - 1; i++) {
+    // 이 구간은 양 끝 점의 색만 선으로 인정 (비슷한 색 도로나 글씨로 새는 것을 줄임)
+    segMask.fill(0);
+    const mask = segMask;
+    for (const k of new Set([colorIdx[i], colorIdx[i + 1]])) { const g = grown[k]; for (let j = 0; j < N; j++) if (g[j]) mask[j] = 1; }
+    const s = snap(picks[i], mask), t = snap(picks[i + 1], mask);
+    if (s < 0 || t < 0) { toast(`${s < 0 ? i + 1 : i + 2}번 점 근처에서 선을 찾지 못했어요. 선 위를 눌러 주세요.`); extract.taps = taps.slice(0, s < 0 ? i : i + 1); extractStep(); return; }
+    const seg = trace(s, t, mask);
+    if (!seg) { toast('선을 따라가지 못했어요. 중간 지점을 더 눌러 주세요.'); extractStep(); return; }
+    seg.forEach(v => { if (!mask[v]) offLine++; });
+    cells.push(...(i ? seg.slice(1) : seg));
+    tapIdx.push(cells.length - 1);
+  }
+  if (offLine / cells.length > 0.25) toast('선이 많이 끊겨 있어요. 결과를 꼭 확인하고 어긋난 곳은 지점을 옮겨 주세요.');
+
+  // 격자 → 사진 픽셀 → 지도 좌표
+  const lls = cells.map(v => { const x = v % gw, y = (v - x) / gw; return photoToLatLng((x + 0.5) / f, (y + 0.5) / f); });
+
+  endExtract();
+  if (extractLayer) map.removeLayer(extractLayer);
+  extractLayer = L.polyline(lls, { color: '#7b2cbf', weight: 3, dashArray: '4 6', opacity: 0.9, interactive: false }).addTo(map);
+
+  if (waypoints.length && !confirm('지금 그리던 코스를 지우고 자동으로 따라 그린 코스로 바꿀까요?')) return;
+  map.fitBounds(extractLayer.getBounds(), { padding: [40, 40] });
+  await fitRouteToLine(lls, tapIdx);
+}
+
+// 사진 속 선(lls)에 맞는 등산로 경로 만들기
+// 누른 점만으로 먼저 경로를 잡고, 선에서 50 m 넘게 벗어난 구간에만 선 위 지점을 추가해 다시 찾는 걸 반복.
+// 지점을 촘촘히 박으면 사진 오차 때문에 옆 등산로로 빠지기 쉬워서, 꼭 필요한 곳에만 지점을 둠.
+async function fitRouteToLine(lls, idxs) {
+  const TOL = 50, MIN_SPAN = 120;
+  clearRoute();
+  const lineIdx = idxs.slice();
+  const addWp = (at, ll) => { const wp = { lat: ll.lat, lng: ll.lng, name: '' }; createMarker(wp); waypoints.splice(at, 0, wp); };
+  lineIdx.forEach((li, i) => addWp(i, lls[li]));
+  // 단계마다 전체 경로를 요청 1번으로 받아서 지점마다 잘라 구간에 넣음
+  const routeAll = async () => {
+    let track;
+    try { track = await brouter(waypoints.map(w => [w.lat, w.lng])); }
+    catch (e) { return false; }
+    // 각 지점에 가장 가까운 경로 위 점을 앞에서부터 차례로 찾아 자름
+    const cut = [0];
+    for (let k = 1; k < waypoints.length - 1; k++) {
+      const w = waypoints[k];
+      let best = cut[k - 1], bd = Infinity, run = 0;
+      // 다음 지점까지 거리의 3배 + 500 m 안에서만 찾음 (왕복 코스에서 돌아오는 길을 잘못 잡지 않게)
+      const limit = 3 * haversine(waypoints[k - 1].lat, waypoints[k - 1].lng, w.lat, w.lng) + 500;
+      for (let j = cut[k - 1]; j < track.length; j++) {
+        if (j > cut[k - 1]) run += haversine(track[j - 1][0], track[j - 1][1], track[j][0], track[j][1]);
+        if (run > limit) break;
+        const d = haversine(w.lat, w.lng, track[j][0], track[j][1]);
+        if (d < bd) { bd = d; best = j; }
+      }
+      cut.push(best);
+    }
+    cut.push(track.length - 1);
+    segments.length = 0;
+    for (let k = 0; k < waypoints.length - 1; k++) segments.push({ mode: 'auto', coords: track.slice(cut[k], cut[k + 1] + 1) });
+    return true;
+  };
+
+  // 미터 단위 평면 좌표 (이 정도 범위에선 메르카토르 × cos(위도)로 충분)
+  const k = Math.cos(lls[0].lat * Math.PI / 180);
+  const P = (lat, lng) => { const p = proj.project(L.latLng(lat, lng)); return [p.x * k, p.y * k]; };
+  const lineP = lls.map(ll => P(ll.lat, ll.lng));
+  const segDist = (p, a, b) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy;
+    const t = L2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2)) : 0;
+    return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+  };
+  const polyDist = (p, poly) => { let m = Infinity; for (let i = 1; i < poly.length; i++) m = Math.min(m, segDist(p, poly[i - 1], poly[i])); return m; };
+  const waitRoutes = async () => { for (let i = 0; i < 160 && segments.some(s => s.pending); i++) await new Promise(r => setTimeout(r, 400)); };
+
+  for (let round = 0; round < 6; round++) {
+    toast(`등산로에 맞추는 중… (${round + 1}단계)`);
+    if (!(await routeAll())) {
+      // 한 번에 받기가 실패하면 구간별로 (기존 방식)
+      segments.length = 0;
+      for (let k = 0; k < waypoints.length - 1; k++) { segments.push({ mode: 'auto', coords: [] }); computeSegment(k); }
+      await waitRoutes();
+      break;
+    }
+    refreshMarkers(); refreshList(); render();
+    const inserts = [];
+    for (let s = 0; s < segments.length; s++) {
+      const a = lineIdx[s], b = lineIdx[s + 1];
+      if (b - a < 4) continue;
+      const part = lineP.slice(a, b + 1);
+      const route = segments[s].coords.map(c => P(c[0], c[1]));
+      if (route.length < 2) continue;
+      // 선 → 경로 거리(선을 놓친 곳), 경로 → 선 거리(엉뚱한 길로 돌아간 곳)
+      let worst = -1, worstD = 0;
+      for (let i = 1; i < part.length - 1; i++) { const d = polyDist(part[i], route); if (d > worstD) { worstD = d; worst = i; } }
+      let detour = 0; for (const p of route) detour = Math.max(detour, polyDist(p, part));
+      let span = 0; for (let i = 1; i < part.length; i++) span += Math.hypot(part[i][0] - part[i - 1][0], part[i][1] - part[i - 1][1]);
+      if (span < MIN_SPAN) continue;
+      if (worstD > TOL) inserts.push([s, a + worst]);
+      else if (detour > TOL) inserts.push([s, a + Math.round((b - a) / 2)]);
+    }
+    if (!inserts.length) break;
+    // 뒤쪽부터 끼워 넣어야 앞쪽 번호가 안 밀림 (경로는 다음 단계에서 한 번에 다시 받음)
+    inserts.sort((x, y) => y[0] - x[0]).forEach(([s, li]) => { addWp(s + 1, lls[li]); lineIdx.splice(s + 1, 0, li); });
+    if (round === 5) await routeAll();
+  }
+  refreshMarkers(); refreshList(); render();
+  await waitRoutes();
+  const cut = trimSpurs();
+  toast(`${waypoints.length}개 지점으로 따라 그렸어요${cut ? ` (곁가지 ${cut}곳 정리)` : ''}. 보라색 점선(사진 속 선)과 비교해서 어긋난 곳만 고쳐 주세요.`);
+}
+
+// 지점이 등산로에서 조금 벗어나 있으면 "갔다가 되돌아오는" 곁가지가 생김 → 잘라내고 지점을 갈림목으로 옮김
+function trimSpurs() {
+  let cut = 0;
+  for (let k = 1; k < waypoints.length - 1; k++) {
+    const A = segments[k - 1]?.coords, B = segments[k]?.coords;
+    if (!A || !B || A.length < 2 || B.length < 2 || segments[k - 1].mode !== 'auto' || segments[k].mode !== 'auto') continue;
+    let best = null;
+    // 끝에서부터 거슬러 가며, 다음 구간 앞부분과 겹치는 가장 이른 지점(=갈림목)을 찾음
+    let lenA = 0;
+    for (let i = A.length - 1; i >= Math.max(0, A.length - 80); i--) {
+      if (i < A.length - 1) lenA += haversine(A[i][0], A[i][1], A[i + 1][0], A[i + 1][1]);
+      if (lenA > 400) break;
+      let lenB = 0;
+      for (let j = 0; j < Math.min(B.length, 80); j++) {
+        if (j) lenB += haversine(B[j - 1][0], B[j - 1][1], B[j][0], B[j][1]);
+        if (lenB > 400) break;
+        if (lenA + lenB >= 15 && haversine(A[i][0], A[i][1], B[j][0], B[j][1]) < 8) { best = { i, j }; break; }
+      }
+    }
+    if (!best) continue;
+    segments[k - 1].coords = A.slice(0, best.i + 1);
+    segments[k].coords = B.slice(best.j);
+    const p = segments[k - 1].coords.at(-1);
+    segments[k].coords[0] = p.slice();
+    const wp = waypoints[k]; wp.lat = p[0]; wp.lng = p[1]; wp.marker.setLatLng([p[0], p[1]]);
+    cut++;
+  }
+  if (cut) { refreshList(); render(); }
+  return cut;
+}
 
 // ---------- saved courses (이 기기에 저장) ----------
 function loadSaved() { try { return JSON.parse(store.get('courses') || '[]'); } catch { return []; } }
