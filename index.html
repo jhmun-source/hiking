@@ -866,9 +866,24 @@ function loadGpxText(text, fileName) {
   const trkName = doc.querySelector('trk > name, metadata > name')?.textContent.trim();
   refName = trkName || fileName.replace(/\.gpx$/i, '');
   // GPX 안의 지점(wpt)도 같이: 갈림길·봉우리 등 (너무 많으면 앞의 200개만)
+  refEndNames = ['', ''];
   refPois = [...doc.getElementsByTagName('wpt')].slice(0, 200).map(w => ({
     n: w.getElementsByTagName('name')[0]?.textContent.trim() || '지점', c: 'GPX', p: [+w.getAttribute('lat'), +w.getAttribute('lon')],
   })).filter(p => isFinite(p.p[0]) && isFinite(p.p[1]) && !/^(출발|도착|지점 \d+)$/.test(p.n)); // 이 앱이 내보낸 출발·도착 표시는 중복이라 뺌
+  // 네이버지도 GPX는 경유지를 <extensions><nmap:waypoints>에 따로 넣음 (출발·도착은 경로 끝점과 같아서 경유지만)
+  for (const w of doc.getElementsByTagNameNS('*', 'waypoint')) {
+    const type = w.getElementsByTagNameNS('*', 'type')[0]?.textContent.trim();
+    const n = w.getElementsByTagNameNS('*', 'name')[0]?.textContent.trim();
+    const p = [+w.getAttribute('lat'), +w.getAttribute('lon')];
+    if (type === 'waypoint' && n && isFinite(p[0]) && isFinite(p[1])) refPois.push({ n, c: 'GPX', p });
+  }
+  // 이름이 없으면 네이버 출발지 이름으로 (예: "지리산허브밸리 → 바래봉")
+  const startName = [...doc.getElementsByTagNameNS('*', 'waypoint')].find(w => w.getElementsByTagNameNS('*', 'type')[0]?.textContent.trim() === 'start')
+    ?.getElementsByTagNameNS('*', 'name')[0]?.textContent.trim();
+  if (!trkName && startName) refName = `${startName} → ${refPois[0]?.n || ''}`.replace(/ → $/, '');
+  const goalName = [...doc.getElementsByTagNameNS('*', 'waypoint')].find(w => w.getElementsByTagNameNS('*', 'type')[0]?.textContent.trim() === 'goal')
+    ?.getElementsByTagNameNS('*', 'name')[0]?.textContent.trim();
+  refEndNames = [startName || '', goalName || ''];
   refLayer = L.polyline(pts.map(p => [p[0], p[1]]), { color: css('--ref'), weight: 4, dashArray: '6 6', opacity: 0.9 }).addTo(map);
   map.fitBounds(refLayer.getBounds(), { padding: [30, 30] });
   const s = trackStats(pts);
@@ -877,7 +892,7 @@ function loadGpxText(text, fileName) {
   render();
   return true;
 }
-let refName = '', refPois = [];
+let refName = '', refPois = [], refEndNames = ['', ''];
 function dropRef() {
   if (refLayer) map.removeLayer(refLayer);
   refLayer = null; refTrack = null;
@@ -890,10 +905,10 @@ $('importUse').onclick = () => useImported();
 function useImported() {
   if (!refTrack) return;
   if (waypoints.length && !confirm('지금 그리던 코스를 지우고 불러온 GPX로 바꿀까요?')) return;
-  const pts = refTrack, name = refName, pois = refPois;
+  const pts = refTrack, name = refName, pois = refPois, ends = refEndNames;
   clearRoute(); dropRef();
   [pts[0], pts.at(-1)].forEach((p, i) => {
-    const wp = { lat: p[0], lng: p[1], name: i ? '도착' : '출발' };
+    const wp = { lat: p[0], lng: p[1], name: ends[i] || (i ? '도착' : '출발') };
     createMarker(wp); waypoints.push(wp);
   });
   segments.push({ mode: 'fixed', coords: pts.map(p => p.slice()) });
