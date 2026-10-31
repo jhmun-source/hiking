@@ -16,7 +16,7 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then(keys => Promise.all(
-    keys.filter(k => k !== SHELL_CACHE && k !== TILE_CACHE).map(k => caches.delete(k))
+    keys.filter(k => k !== SHELL_CACHE && k !== TILE_CACHE && k !== 'shared').map(k => caches.delete(k))
   )).then(() => self.clients.claim()));
 });
 
@@ -26,10 +26,29 @@ async function trimTiles() {
   for (let i = 0; i < keys.length - TILE_LIMIT; i++) await cache.delete(keys[i]);
 }
 
+// 다른 앱의 공유 메뉴에서 GPX를 보내면(manifest share_target) 파일을 잠시 보관하고 앱을 ?shared=1 로 엶
+async function receiveShare(req) {
+  try {
+    const form = await req.formData();
+    const file = form.getAll('gpx').find(f => f && typeof f.text === 'function');
+    if (file) {
+      const cache = await caches.open('shared');
+      await cache.put('shared-gpx', new Response(await file.text(), {
+        headers: { 'content-type': 'application/gpx+xml', 'x-filename': encodeURIComponent(file.name || 'shared.gpx') },
+      }));
+    }
+  } catch (err) {}
+  return Response.redirect('./?shared=1', 303);
+}
+
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  if (req.method === 'POST' && url.origin === location.origin && url.pathname.endsWith('/share-target')) {
+    e.respondWith(receiveShare(req));
+    return;
+  }
+  if (req.method !== 'GET') return;
 
   // 브이월드는 지도 그림(WMTS·WMS)만 캐시하고 검색 API는 제외
   const isVworldTile = url.hostname === 'api.vworld.kr' && /^\/req\/(wmts|wms)/.test(url.pathname);
