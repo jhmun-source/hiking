@@ -1,0 +1,5 @@
+# GitHub에 올리지 않는 것
+.claude/
+*.zip
+*key*.txt
+_test/

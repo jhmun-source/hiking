@@ -239,7 +239,7 @@
         <ul class="list" id="tList"></ul>
       </div>
       <p class="hint">둘레길·올레·평화누리길·백두대간 등: OpenStreetMap 기여자(ODbL) · Waymarked Trails. 고도 정보가 없어서 오르막·고도 그래프는 안 나와요.</p>
-      <p class="hint" id="drHint">해파랑길·남파랑길·서해랑길·DMZ 평화의 길(코리아둘레길 284개 코스)은 설정 탭에 공공데이터포털 인증키를 넣고, 공공데이터포털에서 "한국관광공사_두루누비 정보 서비스" 활용신청을 하면 여기 같이 나와요.</p>
+      <p class="hint">해파랑길·남파랑길·서해랑길·DMZ 평화의 길: 두루누비(한국관광공사) 코리아둘레길 GPX, 고도 포함. 두루누비 API에 공개된 174개 코스만 들어 있어요.</p>
     </div>
 
     <div class="pane on" data-pane="course">
@@ -1702,7 +1702,7 @@ async function loadTrails() {
 async function trailPts(t) {
   if (t.pts) return t.pts;
   if (tCache.has(t.id)) return tCache.get(t.id);
-  const pts = t.src === 'dr' ? await durunubiPts(t) : (await (await fetch(`trails/${t.id}.json`)).json()).pts;
+  const pts = (await (await fetch(`trails/${t.id}.json`)).json()).pts;
   tCache.set(t.id, pts);
   return pts;
 }
@@ -1718,13 +1718,13 @@ async function refreshTrek(mode) {
   for (const t of allTrails()) {
     if (!courseOk(t)) continue;
     if (q && !qMatch(t.series, q) && !qMatch(t.name, q)) continue;
-    const g = groups.get(t.series) || { series: t.series, items: [], d: Infinity, dr: t.src === 'dr' };
+    const g = groups.get(t.series) || { series: t.series, items: [], d: Infinity };
     g.items.push(t);
     if (t.b) g.d = Math.min(g.d, distToBox(c, t.b));
     groups.set(t.series, g);
   }
-  // 두루누비(코리아둘레길)는 위치 정보가 없어서 이름순으로 맨 위, 나머지는 지도에서 가까운 순
-  const list = [...groups.values()].sort((a, b) => (b.dr - a.dr) || (a.d - b.d) || a.series.localeCompare(b.series));
+  // 지도에서 가까운 길부터
+  const list = [...groups.values()].sort((a, b) => (a.d - b.d) || a.series.localeCompare(b.series));
   const ul = $('tSeries'); ul.innerHTML = '';
   if (!list.length) { ul.innerHTML = '<li class="empty">조건에 맞는 길이 없어요. 이름이나 거리 조건을 바꿔 보세요.</li>'; return; }
   list.forEach(g => {
@@ -1776,7 +1776,7 @@ async function renderTrailList() {
 async function drawSeries() {
   tLayer.clearLayers();
   const series = tSeries;
-  const items = allTrails().filter(t => t.series === series && courseOk(t) && t.src !== 'dr');
+  const items = allTrails().filter(t => t.series === series && courseOk(t));
   for (const t of items) {
     let pts; try { pts = await trailPts(t); } catch { continue; }
     if (tSeries !== series) return;
@@ -1791,21 +1791,21 @@ async function selectTrail(t) {
   [...$('tList').children].forEach(li => li.classList.toggle('sel', li.dataset.id == t.id));
   let pts;
   try { pts = await trailPts(t); }
-  catch (e) { if (t.src === 'dr') durunubiFallback(t, e); else toast('경로를 불러오지 못했어요.'); return; }
-  if (t.src === 'dr') { tLayer.clearLayers(); L.polyline(pts.map(p => [p[0], p[1]]), { color: css('--ref'), weight: 6 }).addTo(tLayer); }
-  else drawSeries();
+  catch { toast('경로를 불러오지 못했어요.'); return; }
+  drawSeries();
   fitPadded(L.latLngBounds(pts.map(p => [p[0], p[1]])));
 }
 async function useTrail(t) {
   if (t.broken && !confirm('이 구간은 지도 데이터(OSM)가 불완전해서 실제 길과 다르거나 엉뚱한 곳이 섞여 있을 수 있어요. 미리보기로 확인했나요? 그래도 쓸까요?')) return;
   let pts;
   try { pts = await trailPts(t); }
-  catch (e) { if (t.src === 'dr') durunubiFallback(t, e); else toast('경로를 불러오지 못했어요.'); return; }
+  catch { toast('경로를 불러오지 못했어요.'); return; }
   if (waypoints.length && !confirm('지금 그리던 코스를 지우고 이 코스로 바꿀까요?')) return;
   clearRoute();
   [pts[0], pts.at(-1)].forEach((p, k) => { const wp = { lat: p[0], lng: p[1], name: k ? '도착' : '출발' }; createMarker(wp); waypoints.push(wp); });
   segments.push({ mode: 'fixed', coords: pts.map(p => p.slice()) });
-  $('routeName').value = t.name.startsWith(t.series) || t.name.startsWith('[') ? t.name.replace(/^\[([^\]]+)\]\s*/, '$1 ') : `${t.series} ${t.name}`;
+  const base = t.series.replace(/\s*\(.*\)$/, '');
+  $('routeName').value = t.name.startsWith(base) || t.name.startsWith('[') ? t.name.replace(/^\[([^\]]+)\]\s*/, '$1 ') : `${base} ${t.name}`;
   closeSeries();
   refreshMarkers(); refreshList(); render();
   fitPadded(L.latLngBounds(pts.map(p => [p[0], p[1]])));
@@ -1819,53 +1819,9 @@ function closeSeries() {
 $('tBack').onclick = () => { closeSeries(); refreshTrek(); };
 $('tClose').onclick = () => { closeSeries(); refreshTrek(); };
 
-// 두루누비 코리아둘레길: 공공데이터포털 키가 있으면 목록을 받아 두고(기기에 저장) 트레킹 목록에 합침
-let drList = null;
-try { drList = JSON.parse(store.get('durunubi') || 'null'); } catch {}
-function drTrails() { return drList || []; }
-async function loadDurunubi() {
-  const key = store.get('fsKey');
-  if (!key || drList) return;
-  try {
-    const url = `https://apis.data.go.kr/B551011/Durunubi/courseList?serviceKey=${encodeURIComponent(key)}&MobileOS=ETC&MobileApp=CourseMaker&numOfRows=400&pageNo=1&_type=json`;
-    const j = await (await fetch(url)).json();
-    let items = j?.response?.body?.items?.item || [];
-    if (!Array.isArray(items)) items = [items];
-    if (!items.length) return;
-    const LEVEL = { 1: '쉬움', 2: '보통', 3: '어려움' };
-    drList = items.map(it => {
-      const name = (it.crsKorNm || '').trim();
-      const series = (name.match(/^(해파랑길|남파랑길|서해랑길|DMZ\s*평화의\s*길|[가-힣]+길)/) || [name])[0].replace(/\s+/g, ' ');
-      const min = +it.crsTotlRqrmHour;
-      return {
-        src: 'dr', id: 'dr' + it.crsIdx, name, series: series + ' (코리아둘레길)', dist: Math.round(parseFloat(it.crsDstnc) * 1000) || 0,
-        loop: false, gpx: it.gpxpath, sigun: it.sigun || '', level: LEVEL[it.crsLevel] || '',
-        time: min ? (min >= 60 ? `${Math.floor(min / 60)}시간 ${min % 60 ? (min % 60) + '분' : ''}`.trim() : `${min}분`) : '',
-      };
-    }).filter(t => t.gpx);
-    store.set('durunubi', JSON.stringify(drList));
-    $('drHint').hidden = true;
-    refreshTrek();
-  } catch {}
-}
-// 두루누비 GPX를 앱에서 바로 읽기. 막히면(브라우저 보안) 파일을 받아서 공유로 넣는 방법 안내
-async function durunubiPts(t) {
-  const res = await fetch(t.gpx);
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const doc = new DOMParser().parseFromString(await res.text(), 'application/xml');
-  const pts = [...doc.getElementsByTagName('trkpt')].map(n => {
-    const e = n.getElementsByTagName('ele')[0];
-    return [+n.getAttribute('lat'), +n.getAttribute('lon'), e ? +e.textContent : null];
-  }).filter(p => isFinite(p[0]) && isFinite(p[1]));
-  if (pts.length < 2) throw new Error('empty');
-  return pts;
-}
-function durunubiFallback(t) {
-  toast('이 GPX는 앱에서 바로 열 수 없어서 파일로 받을게요. 받은 파일을 공유 → 코스메이커로 보내 주세요.');
-  window.open(t.gpx, '_blank');
-}
-if (drList) $('drHint').hidden = true;
-loadDurunubi();
+// 두루누비 코리아둘레길은 trails/에 미리 넣어 둠 (두루누비 GPX 서버가 브라우저에서 직접 읽는 걸 막아서)
+function drTrails() { return []; }
+store.set('durunubi', ''); // 예전 버전이 기기에 저장해 둔 실시간 목록 정리 (중복 방지)
 
 // ---------- 산림청 등산로 API 시험 ----------
 // 명세: apis.data.go.kr/1400000/trailInfoService/getforestspatialdataservice?serviceKey&pageNo&numOfRows&mntnNm
@@ -1874,7 +1830,6 @@ loadDurunubi();
 $('fsKey').value = store.get('fsKey') || '';
 $('fsSave').onclick = () => {
   store.set('fsKey', $('fsKey').value.trim()); toast('공공데이터포털 키를 저장했어요');
-  drList = null; store.set('durunubi', ''); loadDurunubi(); // 두루누비 목록 다시 받기
 };
 let fsReport = '';
 $('fsTest').onclick = async () => {
