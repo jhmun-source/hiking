@@ -191,10 +191,13 @@
       <h2>배경 지도</h2>
       <label class="chk"><input type="radio" name="base" value="topo" checked> 등산 지도 (등고선)</label>
       <label class="chk"><input type="radio" name="base" value="osm"> 일반 지도</label>
-      <label class="chk"><input type="radio" name="base" value="sat"> 위성사진</label>
+      <label class="chk"><input type="radio" name="base" value="sat"> 위성사진 (해외 Esri)</label>
+      <label class="chk"><input type="radio" name="base" value="vsat" disabled> 브이월드 위성사진 + 지명</label>
+      <label class="chk"><input type="radio" name="base" value="vbase" disabled> 브이월드 일반 지도</label>
+      <p class="hint" id="vwBaseHint">브이월드 지도는 아래에 인증키를 넣으면 켤 수 있어요.</p>
       <h2>검증용 레이어</h2>
       <label class="chk"><input type="checkbox" id="wmtToggle" checked> OSM 등산로 표시</label>
-      <h2>산림청 공식 등산로 (브이월드 키 필요)</h2>
+      <h2>브이월드 인증키 (산림청 등산로 · 국내 위성사진 · 장소 검색)</h2>
       <div class="row" style="margin-top:0">
         <input type="password" id="vwKey" placeholder="브이월드 인증키" style="flex:3">
         <button class="btn" id="vwApply">적용</button>
@@ -203,7 +206,7 @@
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
-      <p class="hint" style="margin-top:16px">지도 © OpenStreetMap 기여자, OpenTopoMap, Esri · 경로 탐색 BRouter · 검색 Nominatim</p>
+      <p class="hint" style="margin-top:16px">지도 © OpenStreetMap 기여자, OpenTopoMap, Esri · 경로 탐색 BRouter · 검색 브이월드, Nominatim</p>
     </div>
   </div>
 </div>
@@ -224,14 +227,16 @@ function setStatus(msg, err) { const s = $('status'); s.textContent = msg || '';
 // ---------- map ----------
 const map = L.map('map', { zoomControl: false }).setView([35.2795, 129.0560], 14); // 금정산
 const bases = {
-  topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: '© OpenStreetMap, SRTM | © OpenTopoMap' }),
-  osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap 기여자' }),
-  sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery © Esri' }),
+  // zIndex 0: 배경 지도는 항상 등산로 레이어(기본 1) 아래에
+  topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, zIndex: 0, attribution: '© OpenStreetMap, SRTM | © OpenTopoMap' }),
+  osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, zIndex: 0, attribution: '© OpenStreetMap 기여자' }),
+  sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, zIndex: 0, attribution: 'Imagery © Esri' }),
 };
 const wmt = L.tileLayer('https://tile.waymarkedtrails.org/hiking/{z}/{x}/{y}.png', { maxZoom: 18, opacity: 0.8, attribution: '© waymarkedtrails.org' });
 let base = bases.topo; base.addTo(map); wmt.addTo(map);
 L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
 let vwLayer = null;
+let vwKey = '';
 
 // ---------- state ----------
 let mode = 'auto';
@@ -502,23 +507,75 @@ $('searchForm').addEventListener('submit', async (e) => {
   const q = $('q').value.trim(); if (!q) return;
   $('q').blur();
   const ul = $('results'); ul.innerHTML = '<li>검색 중…</li>';
+  // 브이월드(키 있을 때)와 OSM을 같이 검색해서 브이월드 결과를 먼저 보여줌
+  const [vw, osm] = await Promise.all([searchVworld(q).catch(() => []), searchNominatim(q).catch(() => null)]);
+  ul.innerHTML = '';
+  const seen = [];
+  const list = [...vw, ...(osm || [])].filter(r => {
+    if (seen.some(s => haversine(s.lat, s.lng, r.lat, r.lng) < 30 && s.name === r.name)) return false;
+    seen.push(r); return true;
+  }).slice(0, 10);
+  if (!list.length) {
+    ul.innerHTML = osm === null && !vw.length ? '<li>검색에 실패했어요. 인터넷 연결을 확인하세요.</li>' : '<li>결과가 없어요. 짧게 검색하거나 지도에서 직접 찍어 주세요.</li>';
+    setTimeout(() => ul.innerHTML = '', 3000); return;
+  }
+  list.forEach(r => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span></span><small></small>';
+    li.querySelector('span').textContent = r.name;
+    li.querySelector('small').textContent = r.detail;
+    li.onclick = () => { addWaypoint(r.lat, r.lng, r.name); map.panTo([r.lat, r.lng]); ul.innerHTML = ''; $('q').value = ''; };
+    ul.appendChild(li);
+  });
+});
+
+async function searchNominatim(q) {
   const b = map.getBounds().pad(1);
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=6&countrycodes=kr&accept-language=ko&viewbox=${b.getWest()},${b.getNorth()},${b.getEast()},${b.getSouth()}&q=${encodeURIComponent(q)}`;
-  try {
-    const list = await (await fetch(url)).json();
-    ul.innerHTML = '';
-    if (!list.length) { ul.innerHTML = '<li>결과가 없어요. 짧게 검색하거나 지도에서 직접 찍어 주세요.</li>'; setTimeout(() => ul.innerHTML = '', 3000); return; }
-    list.forEach(r => {
-      const li = document.createElement('li');
-      const [first, ...rest] = r.display_name.split(', ');
-      li.innerHTML = '<span></span><small></small>';
-      li.querySelector('span').textContent = first;
-      li.querySelector('small').textContent = rest.slice(0, 3).join(', ');
-      li.onclick = () => { addWaypoint(+r.lat, +r.lon, first); map.panTo([+r.lat, +r.lon]); ul.innerHTML = ''; $('q').value = ''; };
-      ul.appendChild(li);
-    });
-  } catch { ul.innerHTML = '<li>검색에 실패했어요. 인터넷 연결을 확인하세요.</li>'; }
-});
+  const list = await (await fetch(url)).json();
+  return list.map(r => {
+    const [first, ...rest] = r.display_name.split(', ');
+    return { name: first, detail: rest.slice(0, 3).join(', '), lat: +r.lat, lng: +r.lon };
+  });
+}
+
+// 브이월드 검색 API는 CORS를 지원하지 않아 JSONP로 호출
+let jsonpSeq = 0;
+function jsonp(url, timeout = 8000) {
+  return new Promise((resolve, reject) => {
+    const cb = `__vw${++jsonpSeq}`;
+    const s = document.createElement('script');
+    const done = () => { delete window[cb]; s.remove(); clearTimeout(timer); };
+    const timer = setTimeout(() => { done(); reject(new Error('timeout')); }, timeout);
+    window[cb] = (data) => { done(); resolve(data); };
+    s.onerror = () => { done(); reject(new Error('load')); };
+    s.src = `${url}&callback=${cb}`;
+    document.head.appendChild(s);
+  });
+}
+
+async function searchVworld(q) {
+  if (!vwKey) return [];
+  const base = `https://api.vworld.kr/req/search?service=search&request=search&version=2.0&crs=EPSG:4326&size=10&page=1&format=json&errorformat=json&key=${encodeURIComponent(vwKey)}&domain=${encodeURIComponent(location.hostname)}&query=${encodeURIComponent(q)}`;
+  const [place, addr] = await Promise.all([
+    jsonp(`${base}&type=place`).catch(() => null),
+    jsonp(`${base}&type=address&category=road`).catch(() => null),
+  ]);
+  const err = [place, addr].find(r => r?.response?.status === 'ERROR');
+  if (err && !place?.response?.result) toast('브이월드 검색 오류: ' + (err.response.error?.text || '인증키를 확인하세요'));
+  const c = map.getCenter();
+  const items = [
+    ...(place?.response?.result?.items || []).map(it => ({
+      name: it.title, detail: [it.category, it.address?.road || it.address?.parcel].filter(Boolean).join(' · '),
+      lat: +it.point.y, lng: +it.point.x,
+    })),
+    ...(addr?.response?.result?.items || []).map(it => ({
+      name: it.address?.road || it.address?.parcel, detail: '주소', lat: +it.point.y, lng: +it.point.x,
+    })),
+  ].filter(r => r.name && isFinite(r.lat) && isFinite(r.lng));
+  // 전국 결과 중 지금 보고 있는 지도와 가까운 순서로
+  return items.sort((a, b) => haversine(c.lat, c.lng, a.lat, a.lng) - haversine(c.lat, c.lng, b.lat, b.lng)).slice(0, 6);
+}
 map.on('movestart', () => { if ($('results').children.length) $('results').innerHTML = ''; });
 
 // ---------- map controls ----------
@@ -563,20 +620,46 @@ $('locBtn').onclick = () => {
 
 // 배경 지도, 레이어
 document.querySelectorAll('input[name=base]').forEach(r => r.onchange = () => {
-  map.removeLayer(base); base = bases[r.value]; base.addTo(map); base.bringToBack();
+  if (!bases[r.value]) return;
+  map.removeLayer(base); base = bases[r.value]; base.addTo(map);
+  store.set('base', r.value);
 });
 $('wmtToggle').onchange = (e) => e.target.checked ? wmt.addTo(map) : map.removeLayer(wmt);
 function applyVworld(key) {
+  vwKey = key;
   if (vwLayer) { map.removeLayer(vwLayer); vwLayer = null; }
-  if (!key) return;
-  vwLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms', {
-    key, domain: location.hostname || 'localhost', layers: 'lt_l_frstclimb', styles: 'lt_l_frstclimb',
-    format: 'image/png', transparent: true, version: '1.3.0', opacity: 0.9, attribution: '산림청 등산로 · 브이월드',
-  }).addTo(map);
+  // 브이월드 배경지도: 키가 바뀌면 새로 만들고, 키가 없으면 기본 지도로 되돌림
+  const usingVw = base === bases.vsat || base === bases.vbase;
+  if (usingVw) map.removeLayer(base);
+  delete bases.vsat; delete bases.vbase;
+  if (key) {
+    const wmts = (layer, ext, opt) => L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${encodeURIComponent(key)}/${layer}/{z}/{y}/{x}.${ext}`,
+      { minZoom: 6, maxZoom: 19, zIndex: 0, attribution: '© 브이월드(국토교통부)', ...opt });
+    bases.vsat = L.layerGroup([wmts('Satellite', 'jpeg'), wmts('Hybrid', 'png')]);
+    bases.vbase = wmts('Base', 'png');
+    vwLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms', {
+      key, domain: location.hostname || 'localhost', layers: 'lt_l_frstclimb', styles: 'lt_l_frstclimb',
+      format: 'image/png', transparent: true, version: '1.3.0', opacity: 0.9, attribution: '산림청 등산로 · 브이월드',
+    }).addTo(map);
+  }
+  document.querySelectorAll('input[name=base][value^=v]').forEach(r => r.disabled = !key);
+  $('vwBaseHint').hidden = !!key;
+  if (usingVw) {
+    const pick = key ? (bases.vsat && store.get('base') === 'vbase' ? 'vbase' : 'vsat') : 'topo';
+    base = bases[pick]; base.addTo(map);
+    document.querySelector(`input[name=base][value=${pick}]`).checked = true;
+  }
 }
 const savedKey = store.get('vwKey');
 if (savedKey) { $('vwKey').value = savedKey; applyVworld(savedKey); }
-$('vwApply').onclick = () => { const k = $('vwKey').value.trim(); store.set('vwKey', k); applyVworld(k); toast(k ? '산림청 등산로 레이어를 켰어요' : '레이어를 껐어요'); };
+$('vwApply').onclick = () => { const k = $('vwKey').value.trim(); store.set('vwKey', k); applyVworld(k); toast(k ? '브이월드 기능(등산로·위성사진·검색)을 켰어요' : '브이월드 기능을 껐어요'); };
+
+// 마지막으로 고른 배경 지도 기억
+const savedBase = store.get('base');
+if (savedBase && bases[savedBase] && savedBase !== 'topo') {
+  map.removeLayer(base); base = bases[savedBase]; base.addTo(map);
+  document.querySelector(`input[name=base][value=${savedBase}]`).checked = true;
+}
 
 // ---------- GPX ----------
 function esc(s) { return String(s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c])); }

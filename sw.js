@@ -1,5 +1,5 @@
 // 앱 화면은 오프라인에서도 열리게, 지도 타일은 본 것만 캐시 (대량 다운로드 안 함)
-const SHELL_CACHE = 'shell-v1';
+const SHELL_CACHE = 'shell-v2';
 const TILE_CACHE = 'tiles-v1';
 const TILE_LIMIT = 3000;
 const SHELL = [
@@ -30,12 +30,16 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  if (TILE_HOSTS.some(h => url.hostname.endsWith(h))) {
+  // 브이월드는 지도 그림(WMTS·WMS)만 캐시하고 검색 API는 제외
+  const isVworldTile = url.hostname === 'api.vworld.kr' && /^\/req\/(wmts|wms)/.test(url.pathname);
+  if (isVworldTile || TILE_HOSTS.some(h => url.hostname.endsWith(h))) {
     e.respondWith(caches.open(TILE_CACHE).then(async cache => {
       const hit = await cache.match(req);
       if (hit) return hit;
       const res = await fetch(req);
-      if (res.ok || res.type === 'opaque') { cache.put(req, res.clone()); trimTiles(); }
+      // 브이월드는 키 오류도 200(XML)으로 돌려줘서 이미지일 때만 저장
+      const isImage = (res.headers.get('content-type') || '').startsWith('image/');
+      if ((res.ok && (!isVworldTile || isImage)) || res.type === 'opaque') { cache.put(req, res.clone()); trimTiles(); }
       return res;
     }));
     return;
@@ -44,7 +48,8 @@ self.addEventListener('fetch', (e) => {
   const isShell = url.origin === location.origin || url.hostname === 'cdnjs.cloudflare.com';
   if (isShell) {
     // 네트워크 우선, 실패하면 캐시 (앱 업데이트가 바로 반영되도록)
-    e.respondWith(fetch(req).then(res => {
+    // no-cache: 브라우저 HTTP 캐시에 남은 옛 버전 대신 서버에 새 버전이 있는지 확인
+    e.respondWith(fetch(req, { cache: 'no-cache' }).then(res => {
       if (res.ok) caches.open(SHELL_CACHE).then(c => c.put(req, res.clone()));
       return res;
     }).catch(() => caches.match(req).then(r => r || caches.match('./index.html'))));
