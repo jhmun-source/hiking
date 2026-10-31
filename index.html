@@ -67,7 +67,12 @@
   .body { overflow-y: auto; padding: 0 16px 16px; display: none; }
   .sheet.open .body { display: block; }
   .tabs { display: flex; gap: 4px; margin: 10px 0 12px; background: var(--bg); padding: 4px; border-radius: 10px; }
-  .tabs button { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 8px; border-radius: 8px; font: 600 14px system-ui; }
+  .tabs button { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 8px 4px; border-radius: 8px; font: 600 13px system-ui; white-space: nowrap; }
+  .list li.sel { background: var(--accent-soft); border-radius: 8px; }
+  .sheet.half { max-height: 46dvh; } /* 코스 찾기: 지도 미리보기가 보이게 */
+  .list li .go { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .poi-pop b { display: block; }
+  .poi-pop span { color: #555; font-size: 12px; }
   .tabs button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
   .pane { display: none; } .pane.on { display: block; }
   h2 { font-size: 12px; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
@@ -121,7 +126,7 @@
 
   /* 넓은 화면: 시트를 왼쪽 패널로 */
   @media (min-width: 900px) {
-    .sheet { top: 0; right: auto; width: 360px; max-height: none; border-radius: 0; }
+    .sheet, .sheet.half { top: 0; right: auto; width: 360px; max-height: none; border-radius: 0; }
     .sheet .grip { cursor: default; padding-top: 16px; }
     .sheet .grip::before { display: none; }
     .sheet .body { display: block; }
@@ -168,8 +173,29 @@
   <div class="body">
     <div class="tabs">
       <button data-tab="course" class="on">코스</button>
+      <button data-tab="find">코스 찾기</button>
       <button data-tab="saved">저장·불러오기</button>
       <button data-tab="settings">설정</button>
+    </div>
+
+    <div class="pane" data-pane="find">
+      <div id="mBrowse">
+        <div class="row" style="margin-top:0">
+          <input type="text" id="mSearch" placeholder="산 이름 검색 (예: 금정산)" style="flex:3">
+          <button class="btn" id="mNear">지도 근처</button>
+        </div>
+        <ul class="list" id="mList"></ul>
+      </div>
+      <div id="mDetail" hidden>
+        <div class="row" style="margin-top:0">
+          <button class="btn" id="mBack" style="flex:0 0 auto">← 산 목록</button>
+          <button class="btn" id="mClose" style="flex:0 0 auto">지도에서 지우기</button>
+        </div>
+        <h2 id="mTitle"></h2>
+        <p class="hint" style="margin-top:0">코스를 누르면 지도에 미리 보여요. 지도 위 선을 눌러도 돼요. 마음에 들면 "이 코스로"를 누르세요.</p>
+        <ul class="list" id="cList"></ul>
+      </div>
+      <p class="hint">출처: 한국등산·트레킹지원센터 산림청 100대명산 GPX (2022년 1월, 공공데이터포털). 현재 등산로 상황과 다를 수 있어요.</p>
     </div>
 
     <div class="pane on" data-pane="course">
@@ -296,6 +322,7 @@ let mode = 'auto';
 let editing = true;
 const waypoints = []; // {lat,lng,name,marker}
 const segments = [];  // {mode, coords:[[lat,lng,ele|null]], pending, error}
+let routePois = [];   // 명산 코스에서 가져온 갈림길·봉우리 등 {n, c, p:[lat,lng], s?:[방면]}
 const routeLayer = L.layerGroup().addTo(map);
 let refLayer = null, refTrack = null;
 let hoverMarker = null;
@@ -343,6 +370,7 @@ function removeWaypoint(i) {
 }
 
 function clearRoute() {
+  routePois = []; showRoutePois();
   waypoints.forEach(w => map.removeLayer(w.marker));
   waypoints.length = 0; segments.length = 0;
   refreshList(); render(); setStatus('');
@@ -584,6 +612,8 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.dataset.pane === b.dataset.tab));
   if (b.dataset.tab === 'saved') refreshSaved();
+  if (b.dataset.tab === 'find' && !mData) renderMountains();
+  sheet.classList.toggle('half', b.dataset.tab === 'find');
   if (b.dataset.tab === 'course') requestAnimationFrame(() => drawChart());
 });
 function openTab(name) { sheet.classList.add('open'); document.querySelector(`.tabs button[data-tab="${name}"]`).click(); }
@@ -757,7 +787,11 @@ function routeName() { return $('routeName').value.trim() || '등산 코스'; }
 function buildGpx() {
   const pts = fullTrack();
   const name = routeName();
-  const wpts = waypoints.map((w, i) => `  <wpt lat="${w.lat.toFixed(7)}" lon="${w.lng.toFixed(7)}"><name>${esc(w.name || (i === 0 ? '출발' : i === waypoints.length - 1 ? '도착' : '지점 ' + i))}</name></wpt>`).join('\n');
+  const wpts = [
+    ...waypoints.map((w, i) => [w.lat, w.lng, w.name || (i === 0 ? '출발' : i === waypoints.length - 1 ? '도착' : '지점 ' + i)]),
+    // 명산 코스에서 가져온 갈림길·봉우리 등 (워치에서 지점으로 보임)
+    ...routePois.map(p => [p.p[0], p.p[1], poiLabel(p)]),
+  ].map(([lat, lng, name]) => `  <wpt lat="${lat.toFixed(7)}" lon="${lng.toFixed(7)}"><name>${esc(name)}</name></wpt>`).join('\n');
   const trk = pts.map(p => `      <trkpt lat="${p[0].toFixed(7)}" lon="${p[1].toFixed(7)}">${p[2] != null ? `<ele>${p[2].toFixed(1)}</ele>` : ''}</trkpt>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="등산 코스 메이커" xmlns="http://www.topografix.com/GPX/1/1">
@@ -1272,6 +1306,7 @@ $('saveBtn').onclick = () => {
     dist: s ? s.dist : 0, up: s ? s.up : 0,
     waypoints: waypoints.map(w => ({ lat: w.lat, lng: w.lng, name: w.name })),
     segments: segments.map(sg => ({ mode: sg.mode, coords: sg.coords, error: sg.error || null })),
+    pois: routePois,
   };
   const same = list.findIndex(c => c.name === entry.name);
   if (same >= 0) list.splice(same, 1);
@@ -1282,6 +1317,8 @@ function openCourse(c) {
   clearRoute();
   c.waypoints.forEach(w => { const wp = { ...w }; createMarker(wp); waypoints.push(wp); });
   c.segments.forEach(sg => segments.push({ mode: sg.mode, coords: sg.coords, error: sg.error }));
+  routePois = c.pois || [];
+  showRoutePois();
   $('routeName').value = c.name;
   refreshMarkers(); refreshList(); render();
   if (routeLayer.getLayers().length) map.fitBounds(L.featureGroup(routeLayer.getLayers()).getBounds(), { padding: [40, 40] });
@@ -1304,6 +1341,143 @@ function refreshSaved() {
     ul.appendChild(li);
   });
 }
+
+// ---------- 코스 찾기 (산림청 100대명산 GPX) ----------
+// courses/index.json: 산 목록과 코스 요약, courses/<산>.json: 코스 경로와 갈림길·관심지점 (필요할 때만 받음)
+const POI_LABEL = { SIGN: '갈림길', PEAK: '봉우리', SPRING: '샘', TOILET: '화장실', DANGER: '위험', SHELTER: '대피소', ENTRY: '들머리' };
+const POI_COLOR = { SIGN: '#1d3557', PEAK: '#2f6b3f', SPRING: '#1a73e8', TOILET: '#6b716c', DANGER: '#d1495b', SHELTER: '#8a5a00', ENTRY: '#7b2cbf' };
+function poiLabel(p) {
+  if (p.c === 'SIGN' && p.s?.length) return `갈림길: ${p.s.join(' · ')}`;
+  return p.n && p.n !== POI_LABEL[p.c] ? `${p.n}` : (POI_LABEL[p.c] || p.n);
+}
+const poiLayer = L.layerGroup().addTo(map);
+function drawPois(list) {
+  poiLayer.clearLayers();
+  list.forEach(p => {
+    const m = L.circleMarker(p.p, { radius: p.c === 'PEAK' ? 6 : 5, color: '#fff', weight: 2, fillColor: POI_COLOR[p.c] || '#555', fillOpacity: 1 });
+    const div = document.createElement('div'); div.className = 'poi-pop';
+    const b = document.createElement('b'); b.textContent = p.c === 'SIGN' ? '갈림길' : (p.n || POI_LABEL[p.c]);
+    div.appendChild(b);
+    const sub = document.createElement('span');
+    sub.textContent = p.c === 'SIGN' && p.s?.length ? '방면: ' + p.s.join(' / ') : (POI_LABEL[p.c] || '');
+    div.appendChild(sub);
+    m.bindPopup(div).addTo(poiLayer);
+  });
+}
+function showRoutePois() { drawPois(routePois); }
+
+// 코스 경로에서 가까운(60 m) 주요 지점만
+function poisNear(pts, pois) {
+  const keep = new Set(Object.keys(POI_LABEL));
+  const sample = pts.filter((_, i) => i % 2 === 0);
+  return pois.filter(p => keep.has(p.c) && sample.some(q => haversine(q[0], q[1], p.p[0], p.p[1]) < 60));
+}
+
+let mIndex = null, mData = null, mSel = -1;
+const mLayer = L.layerGroup().addTo(map);
+async function loadIndex() {
+  if (mIndex) return mIndex;
+  try { mIndex = await (await fetch('courses/index.json')).json(); }
+  catch { toast('코스 목록을 불러오지 못했어요. 인터넷 연결을 확인하세요.'); return null; }
+  return mIndex;
+}
+function fitPadded(bounds) {
+  // 패널에 가리지 않게 여백
+  const wide = window.innerWidth >= 900;
+  map.fitBounds(bounds, wide ? { paddingTopLeft: [380, 70], paddingBottomRight: [20, 20] }
+    : { paddingTopLeft: [20, 70], paddingBottomRight: [70, sheet.offsetHeight + 20] });
+}
+function distToBox(c, b) {
+  const lat = Math.min(Math.max(c.lat, b[0]), b[2]), lng = Math.min(Math.max(c.lng, b[1]), b[3]);
+  return haversine(c.lat, c.lng, lat, lng);
+}
+async function renderMountains(mode) {
+  const idx = await loadIndex(); if (!idx) return;
+  const q = $('mSearch').value.trim();
+  const c = map.getCenter();
+  let list = idx.mountains.map(m => ({ ...m, d: distToBox(c, m.b) }));
+  if (q) list = list.filter(m => m.m.includes(q));
+  if (mode === 'near' || !q) list.sort((a, b) => a.d - b.d);
+  const ul = $('mList'); ul.innerHTML = '';
+  if (!list.length) { ul.innerHTML = '<li class="empty">100대 명산에 없는 산이에요. 다른 이름으로 검색하거나 직접 그려 주세요.</li>'; return; }
+  list.slice(0, q ? 30 : 12).forEach(m => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="name"><span></span><small></small></span><button>코스 보기</button>';
+    li.querySelector('.name > span').textContent = m.m;
+    li.querySelector('small').textContent = `코스 ${m.courses.length}개 · ${m.d < 1000 ? '지도 안' : `지도에서 ${Math.round(m.d / 1000)} km`}`;
+    li.onclick = () => openMountain(m.m);
+    ul.appendChild(li);
+  });
+}
+$('mSearch').addEventListener('input', () => renderMountains());
+$('mNear').onclick = () => { $('mSearch').value = ''; renderMountains('near'); };
+
+async function openMountain(name) {
+  let data;
+  try { data = await (await fetch(`courses/${encodeURIComponent(name)}.json`)).json(); }
+  catch { toast('코스를 불러오지 못했어요. 인터넷 연결을 확인하세요.'); return; }
+  mData = data; mSel = -1;
+  $('mBrowse').hidden = true; $('mDetail').hidden = false;
+  $('mTitle').textContent = `${name} · 코스 ${data.courses.length}개`;
+  drawMountain();
+  const ul = $('cList'); ul.innerHTML = '';
+  data.courses.forEach((c, i) => {
+    const s = trackStats(c.pts);
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="name"><span></span><small></small></span><button class="go">이 코스로</button>';
+    li.querySelector('.name > span').textContent = c.name;
+    li.querySelector('small').textContent = `${(c.dist / 1000).toFixed(1)} km · 오르막 ${c.up} m · 약 ${fmtTime(s.hours)}`;
+    li.onclick = () => selectCourse(i);
+    li.querySelector('.go').onclick = (e) => { e.stopPropagation(); useCourse(i); };
+    ul.appendChild(li);
+  });
+  fitPadded(L.latLngBounds(data.courses.flatMap(c => [c.pts[0], c.pts.at(-1)]).map(p => [p[0], p[1]])).pad(0.2));
+}
+function drawMountain() {
+  mLayer.clearLayers();
+  if (!mData) return;
+  mData.courses.forEach((c, i) => {
+    const sel = i === mSel;
+    const line = L.polyline(c.pts.map(p => [p[0], p[1]]), {
+      color: sel ? css('--ref') : '#5b6f8a', weight: sel ? 6 : 3, opacity: sel ? 1 : (mSel < 0 ? 0.7 : 0.35),
+    }).addTo(mLayer);
+    line.on('click', (e) => { L.DomEvent.stop(e); selectCourse(i); });
+    if (sel) line.bringToFront();
+  });
+}
+function selectCourse(i) {
+  mSel = i;
+  drawMountain();
+  const c = mData.courses[i];
+  drawPois(poisNear(c.pts, mData.pois));
+  [...$('cList').children].forEach((li, k) => li.classList.toggle('sel', k === i));
+  $('cList').children[i]?.scrollIntoView({ block: 'nearest' });
+  fitPadded(L.latLngBounds(c.pts.map(p => [p[0], p[1]])));
+}
+function useCourse(i) {
+  const c = mData.courses[i];
+  if (waypoints.length && !confirm('지금 그리던 코스를 지우고 이 코스로 바꿀까요?')) return;
+  clearRoute();
+  [c.pts[0], c.pts.at(-1)].forEach((p, k) => {
+    const wp = { lat: p[0], lng: p[1], name: k ? '도착' : '출발' };
+    createMarker(wp); waypoints.push(wp);
+  });
+  segments.push({ mode: 'fixed', coords: c.pts.map(p => p.slice()) });
+  routePois = poisNear(c.pts, mData.pois);
+  $('routeName').value = `${mData.mountain} ${c.name}`;
+  closeMountain();
+  showRoutePois();
+  refreshMarkers(); refreshList(); render();
+  fitPadded(L.latLngBounds(c.pts.map(p => [p[0], p[1]])));
+  openTab('course');
+  toast('코스를 불러왔어요. 저장하거나 워치로 보낼 수 있어요. 갈림길·봉우리도 같이 들어가요.');
+}
+function closeMountain() {
+  mData = null; mSel = -1; mLayer.clearLayers(); showRoutePois();
+  $('mBrowse').hidden = false; $('mDetail').hidden = true;
+}
+$('mBack').onclick = () => { closeMountain(); renderMountains(); };
+$('mClose').onclick = () => { closeMountain(); renderMountains(); };
 
 // ---------- 앱 설치 & 오프라인 ----------
 let installPrompt = null;
