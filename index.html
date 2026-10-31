@@ -70,6 +70,10 @@
   .tabs button { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 8px 4px; border-radius: 8px; font: 600 13px system-ui; white-space: nowrap; }
   .list li.sel { background: var(--accent-soft); border-radius: 8px; }
   .sheet.half { max-height: 46dvh; } /* 코스 찾기: 지도 미리보기가 보이게 */
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { flex: 1; border: 0; background: var(--panel); color: var(--text); padding: 9px 2px; font: 600 12px system-ui; white-space: nowrap; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--accent); color: #fff; }
   .list li .go { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .poi-pop b { display: block; }
   .poi-pop span { color: #555; font-size: 12px; }
@@ -179,6 +183,14 @@
     </div>
 
     <div class="pane" data-pane="find">
+      <div class="seg" id="distSeg">
+        <button data-d="all" class="on">전체</button>
+        <button data-d="s">~5km</button>
+        <button data-d="m">5~10km</button>
+        <button data-d="l">10~15km</button>
+        <button data-d="xl">15km~</button>
+      </div>
+      <label class="chk" style="margin:4px 0 8px"><input type="checkbox" id="loopOnly"> 원점회귀만 (출발지로 돌아오는 코스)</label>
       <div id="mBrowse">
         <div class="row" style="margin-top:0">
           <input type="text" id="mSearch" placeholder="산 이름 검색 (예: 금정산)" style="flex:3">
@@ -1430,20 +1442,48 @@ function distToBox(c, b) {
   const lat = Math.min(Math.max(c.lat, b[0]), b[2]), lng = Math.min(Math.max(c.lng, b[1]), b[3]);
   return haversine(c.lat, c.lng, lat, lng);
 }
+// 거리·원점회귀 필터 (이 기기에 기억). 원점회귀는 변환할 때 출발·도착이 200 m 안이면 이름에 붙여 둠
+const DIST_RANGES = { all: [0, Infinity], s: [0, 5000], m: [5000, 10000], l: [10000, 15000], xl: [15000, Infinity] };
+let cFilter = { dist: 'all', loop: false };
+try { cFilter = { ...cFilter, ...JSON.parse(store.get('cFilter') || '{}') }; } catch {}
+const isLoop = (c) => c.name.includes('(원점회귀)');
+function courseOk(c) {
+  const [lo, hi] = DIST_RANGES[cFilter.dist] || DIST_RANGES.all;
+  return c.dist >= lo && c.dist < hi && (!cFilter.loop || isLoop(c));
+}
+function syncFilterUi() {
+  document.querySelectorAll('#distSeg button').forEach(b => b.classList.toggle('on', b.dataset.d === cFilter.dist));
+  $('loopOnly').checked = cFilter.loop;
+}
+function setFilter(patch) {
+  cFilter = { ...cFilter, ...patch }; store.set('cFilter', JSON.stringify(cFilter)); syncFilterUi();
+  if (mData) { if (mSel >= 0 && !courseOk(mData.courses[mSel])) { mSel = -1; drawPois([]); } renderCourses(); drawMountain(); }
+  else renderMountains();
+}
+document.querySelectorAll('#distSeg button').forEach(b => b.onclick = () => setFilter({ dist: b.dataset.d }));
+$('loopOnly').onchange = (e) => setFilter({ loop: e.target.checked });
+syncFilterUi();
+
 async function renderMountains(mode) {
   const idx = await loadIndex(); if (!idx) return;
   const q = $('mSearch').value.trim();
   const c = map.getCenter();
-  let list = idx.mountains.map(m => ({ ...m, d: distToBox(c, m.b) }));
+  let list = idx.mountains.map(m => ({ ...m, d: distToBox(c, m.b), n: m.courses.filter(courseOk).length }));
   if (q) list = list.filter(m => m.m.includes(q));
+  const filtered = cFilter.dist !== 'all' || cFilter.loop;
+  if (filtered) list = list.filter(m => m.n > 0);
   if (mode === 'near' || !q) list.sort((a, b) => a.d - b.d);
   const ul = $('mList'); ul.innerHTML = '';
-  if (!list.length) { ul.innerHTML = '<li class="empty">100대 명산에 없는 산이에요. 다른 이름으로 검색하거나 직접 그려 주세요.</li>'; return; }
+  if (!list.length) {
+    ul.innerHTML = filtered ? '<li class="empty">조건에 맞는 코스가 없어요. 거리나 원점회귀 조건을 바꿔 보세요.</li>'
+      : '<li class="empty">100대 명산에 없는 산이에요. 다른 이름으로 검색하거나 직접 그려 주세요.</li>';
+    return;
+  }
   list.slice(0, q ? 30 : 12).forEach(m => {
     const li = document.createElement('li');
     li.innerHTML = '<span class="name"><span></span><small></small></span><button>코스 보기</button>';
     li.querySelector('.name > span').textContent = m.m;
-    li.querySelector('small').textContent = `코스 ${m.courses.length}개 · ${m.d < 1000 ? '지도 안' : `지도에서 ${Math.round(m.d / 1000)} km`}`;
+    li.querySelector('small').textContent = `${filtered ? `조건에 맞는 코스 ${m.n}개` : `코스 ${m.courses.length}개`} · ${m.d < 1000 ? '지도 안' : `지도에서 ${Math.round(m.d / 1000)} km`}`;
     li.onclick = () => openMountain(m.m);
     ul.appendChild(li);
   });
@@ -1457,12 +1497,21 @@ async function openMountain(name) {
   catch { toast('코스를 불러오지 못했어요. 인터넷 연결을 확인하세요.'); return; }
   mData = data; mSel = -1;
   $('mBrowse').hidden = true; $('mDetail').hidden = false;
-  $('mTitle').textContent = `${name} · 코스 ${data.courses.length}개`;
   drawMountain();
+  renderCourses();
+  const shown = data.courses.filter(courseOk);
+  fitPadded(L.latLngBounds((shown.length ? shown : data.courses).flatMap(c => [c.pts[0], c.pts.at(-1)]).map(p => [p[0], p[1]])).pad(0.2));
+}
+function renderCourses() {
+  const shown = mData.courses.map((c, i) => [c, i]).filter(([c]) => courseOk(c));
+  $('mTitle').textContent = `${mData.mountain} · 코스 ${shown.length === mData.courses.length ? `${shown.length}개` : `${shown.length}개 / 전체 ${mData.courses.length}개`}`;
   const ul = $('cList'); ul.innerHTML = '';
-  data.courses.forEach((c, i) => {
+  if (!shown.length) { ul.innerHTML = '<li class="empty">이 산에는 조건에 맞는 코스가 없어요.</li>'; return; }
+  shown.forEach(([c, i]) => {
     const s = trackStats(c.pts);
     const li = document.createElement('li');
+    li.dataset.i = i;
+    li.className = i === mSel ? 'sel' : '';
     li.innerHTML = '<span class="name"><span></span><small></small></span><button class="go">이 코스로</button>';
     li.querySelector('.name > span').textContent = c.name;
     li.querySelector('small').textContent = `${(c.dist / 1000).toFixed(1)} km · 오르막 ${c.up} m · 약 ${fmtTime(s.hours)}`;
@@ -1470,12 +1519,12 @@ async function openMountain(name) {
     li.querySelector('.go').onclick = (e) => { e.stopPropagation(); useCourse(i); };
     ul.appendChild(li);
   });
-  fitPadded(L.latLngBounds(data.courses.flatMap(c => [c.pts[0], c.pts.at(-1)]).map(p => [p[0], p[1]])).pad(0.2));
 }
 function drawMountain() {
   mLayer.clearLayers();
   if (!mData) return;
   mData.courses.forEach((c, i) => {
+    if (!courseOk(c)) return;
     const sel = i === mSel;
     const line = L.polyline(c.pts.map(p => [p[0], p[1]]), {
       color: sel ? css('--ref') : '#5b6f8a', weight: sel ? 6 : 3, opacity: sel ? 1 : (mSel < 0 ? 0.7 : 0.35),
@@ -1489,8 +1538,8 @@ function selectCourse(i) {
   drawMountain();
   const c = mData.courses[i];
   drawPois(poisNear(c.pts, mData.pois));
-  [...$('cList').children].forEach((li, k) => li.classList.toggle('sel', k === i));
-  $('cList').children[i]?.scrollIntoView({ block: 'nearest' });
+  [...$('cList').children].forEach(li => li.classList.toggle('sel', +li.dataset.i === i));
+  $('cList').querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' });
   fitPadded(L.latLngBounds(c.pts.map(p => [p[0], p[1]])));
 }
 function useCourse(i) {
