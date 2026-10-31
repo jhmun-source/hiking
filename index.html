@@ -57,9 +57,16 @@
 
   /* 하단 시트 */
   .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1001; background: var(--panel); border-radius: 16px 16px 0 0; box-shadow: var(--shadow);
-           max-height: 78dvh; display: flex; flex-direction: column; padding-bottom: env(safe-area-inset-bottom); transition: transform .2s; }
-  .grip { padding: 8px 16px 6px; cursor: pointer; flex: none; }
-  .grip::before { content: ""; display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 8px; }
+           max-height: 92dvh; display: flex; flex-direction: column; padding-bottom: env(safe-area-inset-bottom); transition: transform .2s; }
+  .grip { padding: 0 16px 6px; cursor: pointer; flex: none; touch-action: none; user-select: none; }
+  /* 손잡이: 위아래로 끌 수 있다는 걸 보여주는 막대 (누를 수 있는 영역은 넉넉하게) */
+  .handle { padding: 10px 0 8px; }
+  .handle::before { content: ""; display: block; width: 56px; height: 5px; border-radius: 3px; background: var(--muted); opacity: .7; margin: 0 auto; }
+  .sheet-ctl { display: flex; gap: 8px; margin-top: 8px; }
+  .sheet-ctl button { flex: 1; font: 600 13px system-ui; padding: 9px 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+  .sheet-ctl .pill { background: var(--accent); border-color: var(--accent); color: #fff; font-size: 14px; padding: 11px 8px; }
+  .sheet:not(.open) #sheetSize, .sheet:not(.open) #sheetClose, .sheet.open #sheetOpen { display: none; }
+  .sheet.dragging { transition: none; }
   .summary { display: flex; gap: 6px; justify-content: space-between; }
   .summary div { flex: 1; text-align: center; }
   .summary b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
@@ -68,6 +75,7 @@
   .sheet.open .body { display: block; }
   /* 열린 패널은 탭과 상관없이 같은 높이 (내용은 패널 안에서 스크롤). 위쪽 지도가 보이도록 절반 정도 */
   .sheet.open { height: 55dvh; }
+  .sheet.open.full { height: 90dvh; } /* 목록을 많이 볼 때 */
   .tabs { position: sticky; top: 0; z-index: 2; box-shadow: 0 -10px 0 var(--panel), 0 6px 0 var(--panel); }
   .tabs { display: flex; gap: 4px; margin: 10px 0 12px; background: var(--bg); padding: 4px; border-radius: 10px; }
   .tabs button { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 8px 4px; border-radius: 8px; font: 600 13px system-ui; white-space: nowrap; }
@@ -132,9 +140,9 @@
 
   /* 넓은 화면: 시트를 왼쪽 패널로 */
   @media (min-width: 900px) {
-    .sheet, .sheet.open { top: 0; right: auto; width: 360px; height: auto; max-height: none; border-radius: 0; }
+    .sheet, .sheet.open, .sheet.open.full { top: 0; right: auto; width: 360px; height: auto; max-height: none; border-radius: 0; }
     .sheet .grip { cursor: default; padding-top: 16px; }
-    .sheet .grip::before { display: none; }
+    .sheet .handle, .sheet .sheet-ctl { display: none; }
     .sheet .body { display: block; }
     #map { left: 360px; }
     .top { left: 376px; }
@@ -168,6 +176,7 @@
 
 <div class="sheet" id="sheet">
   <div class="grip" id="grip">
+    <div class="handle" title="위아래로 끌어서 크기 조절"></div>
     <div class="summary">
       <div><b id="sDist">0.0 km</b><span>거리</span></div>
       <div><b id="sTime">-</b><span>예상 시간</span></div>
@@ -175,6 +184,12 @@
       <div><b id="sMax">-</b><span>최고 고도</span></div>
     </div>
     <div id="status"></div>
+    <!-- 패널 크기 버튼: 닫힘이면 "메뉴 열기", 열려 있으면 크게/작게 + 닫기 -->
+    <div class="sheet-ctl">
+      <button id="sheetOpen" class="pill">▲ 메뉴 열기 · 코스 · 산 · 트레킹</button>
+      <button id="sheetSize">⬆ 크게 보기</button>
+      <button id="sheetClose">▼ 닫기</button>
+    </div>
   </div>
   <div class="body">
     <div class="tabs">
@@ -697,7 +712,50 @@ window.addEventListener('resize', () => drawChart());
 
 // ---------- sheet & tabs ----------
 const sheet = $('sheet');
-$('grip').onclick = () => { sheet.classList.toggle('open'); requestAnimationFrame(() => drawChart()); };
+// 패널 높이 3단계: closed(요약만) · half(55%) · full(90%)
+function sheetState() { return !sheet.classList.contains('open') ? 'closed' : sheet.classList.contains('full') ? 'full' : 'half'; }
+function setSheet(state) {
+  sheet.classList.toggle('open', state !== 'closed');
+  sheet.classList.toggle('full', state === 'full');
+  $('sheetSize').textContent = state === 'full' ? '⬇ 작게 보기' : '⬆ 크게 보기';
+  requestAnimationFrame(() => drawChart());
+}
+$('sheetOpen').onclick = (e) => { e.stopPropagation(); setSheet('half'); };
+$('sheetSize').onclick = (e) => { e.stopPropagation(); setSheet(sheetState() === 'full' ? 'half' : 'full'); };
+$('sheetClose').onclick = (e) => { e.stopPropagation(); setSheet('closed'); };
+
+// 손잡이·요약 부분을 위아래로 끌면 크기 조절, 놓으면 가까운 단계로. 살짝 누르기만 하면 열기/닫기
+let drag = null, dragMoved = false;
+$('grip').addEventListener('pointerdown', (e) => {
+  if (window.innerWidth >= 900 || e.target.closest('button')) return;
+  drag = { y: e.clientY, h: sheet.getBoundingClientRect().height, id: e.pointerId };
+  dragMoved = false;
+  // 손가락이 패널 밖(지도 위)으로 나가도 계속 이 패널이 움직임을 받도록
+  $('grip').setPointerCapture(e.pointerId);
+});
+$('grip').addEventListener('pointermove', (e) => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const dy = e.clientY - drag.y;
+  if (!dragMoved && Math.abs(dy) < 8) return;
+  if (!dragMoved) { dragMoved = true; sheet.classList.add('open', 'dragging'); }
+  const vh = window.innerHeight;
+  sheet.style.height = Math.max(120, Math.min(vh * 0.92, drag.h - dy)) + 'px';
+});
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  drag = null;
+  if (!dragMoved) return;
+  const ratio = sheet.getBoundingClientRect().height / window.innerHeight;
+  sheet.style.height = ''; sheet.classList.remove('dragging');
+  setSheet(ratio < 0.3 ? 'closed' : ratio < 0.72 ? 'half' : 'full');
+}
+$('grip').addEventListener('pointerup', endDrag);
+$('grip').addEventListener('pointercancel', endDrag);
+$('grip').onclick = (e) => {
+  if (dragMoved) { dragMoved = false; return; } // 끌기 끝난 뒤의 클릭은 무시
+  if (e.target.closest('button')) return;
+  setSheet(sheetState() === 'closed' ? 'half' : 'closed');
+};
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.dataset.pane === b.dataset.tab));
@@ -705,7 +763,7 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   if (b.dataset.tab === 'find' && !mData) renderMountains();
   if (b.dataset.tab === 'trek') refreshTrek();  if (b.dataset.tab === 'course') requestAnimationFrame(() => drawChart());
 });
-function openTab(name) { sheet.classList.add('open'); document.querySelector(`.tabs button[data-tab="${name}"]`).click(); }
+function openTab(name) { if (sheetState() === 'closed') setSheet('half'); document.querySelector(`.tabs button[data-tab="${name}"]`).click(); }
 
 // ---------- search ----------
 $('searchForm').addEventListener('submit', async (e) => {
@@ -1138,7 +1196,7 @@ function drawPins(pts, w, h) {
 }
 function georefMapStep() {
   $('georef').hidden = true;
-  sheet.classList.remove('open'); // 폰에서 지도를 가리지 않게
+  setSheet('closed'); // 폰에서 지도를 가리지 않게
   $('mapBannerMsg').textContent = `지도에서 사진의 ${georef.mapPts.length + 1}번 지점과 같은 곳을 누르세요`;
   $('mapBanner').hidden = false;
 }
