@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f6b3f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="코스메이커">
+<title>등산 코스 메이커</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --text: #1f2421; --muted: #6b716c;
+    --line: #e2e0d9; --accent: #2f6b3f; --accent-soft: #e4efe6; --route: #d1495b;
+    --ref: #e08a1e; --danger: #b3261e; --me: #1a73e8;
+    --shadow: 0 2px 10px rgba(0,0,0,.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161917; --panel: #1f2421; --text: #e9ece8; --muted: #9aa29b;
+      --line: #333a35; --accent: #6fbf83; --accent-soft: #263a2c; --route: #ff6b7d;
+      --ref: #f2a03d; --danger: #ff8a80; --me: #8ab4f8; --shadow: 0 2px 12px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161917; --panel: #1f2421; --text: #e9ece8; --muted: #9aa29b;
+    --line: #333a35; --accent: #6fbf83; --accent-soft: #263a2c; --route: #ff6b7d;
+    --ref: #f2a03d; --danger: #ff8a80; --me: #8ab4f8; --shadow: 0 2px 12px rgba(0,0,0,.5);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
+  #map { position: fixed; inset: 0; }
+
+  /* 상단 검색 */
+  .top { position: fixed; top: calc(env(safe-area-inset-top) + 10px); left: 12px; right: 12px; z-index: 1000; max-width: 520px; }
+  .search { display: flex; background: var(--panel); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+  .search input { flex: 1; min-width: 0; border: 0; padding: 12px 14px; background: transparent; color: var(--text); font: inherit; outline: none; }
+  .search button { border: 0; background: transparent; color: var(--accent); font: 600 15px system-ui; padding: 0 14px; }
+  #results { list-style: none; margin: 6px 0 0; padding: 4px; background: var(--panel); border-radius: 12px; box-shadow: var(--shadow); }
+  #results:empty { display: none; }
+  #results li { padding: 10px; border-radius: 8px; cursor: pointer; }
+  #results li:active, #results li:hover { background: var(--accent-soft); }
+  #results li small { color: var(--muted); display: block; font-size: 12px; }
+
+  /* 오른쪽 플로팅 버튼 */
+  .fabs { position: fixed; right: 12px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; top: calc(env(safe-area-inset-top) + 72px); }
+  .fab { width: 46px; height: 46px; border-radius: 12px; border: 0; background: var(--panel); color: var(--text); box-shadow: var(--shadow); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .fab svg { width: 22px; height: 22px; }
+  .fab.on { background: var(--accent); color: #fff; }
+  .fab small { font: 600 10px system-ui; display: block; margin-top: -2px; }
+  .fab.text { flex-direction: column; font-size: 10px; }
+
+  /* 하단 시트 */
+  .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1001; background: var(--panel); border-radius: 16px 16px 0 0; box-shadow: var(--shadow);
+           max-height: 78dvh; display: flex; flex-direction: column; padding-bottom: env(safe-area-inset-bottom); transition: transform .2s; }
+  .grip { padding: 8px 16px 6px; cursor: pointer; flex: none; }
+  .grip::before { content: ""; display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 8px; }
+  .summary { display: flex; gap: 6px; justify-content: space-between; }
+  .summary div { flex: 1; text-align: center; }
+  .summary b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
+  .summary span { color: var(--muted); font-size: 11px; }
+  .body { overflow-y: auto; padding: 0 16px 16px; display: none; }
+  .sheet.open .body { display: block; }
+  .tabs { display: flex; gap: 4px; margin: 10px 0 12px; background: var(--bg); padding: 4px; border-radius: 10px; }
+  .tabs button { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 8px; border-radius: 8px; font: 600 14px system-ui; }
+  .tabs button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .pane { display: none; } .pane.on { display: block; }
+  h2 { font-size: 12px; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  input[type=text], input[type=password] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
+  button.btn { font: inherit; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.btn:disabled { opacity: .45; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .row > * { flex: 1; }
+  .chart-box { position: relative; height: 130px; margin-top: 4px; }
+  #chart { width: 100%; height: 100%; display: block; touch-action: pan-y; }
+  .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; pointer-events: none; }
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .list .n { width: 24px; height: 24px; border-radius: 50%; background: var(--route); color: #fff; display: grid; place-items: center; font-size: 11px; flex: none; }
+  .list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list .name small { display: block; color: var(--muted); font-size: 12px; }
+  .list .mode { font-size: 11px; color: var(--muted); }
+  .list button { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+  #status { font-size: 12px; color: var(--muted); min-height: 1em; text-align: center; margin-top: 4px; }
+  #status.err { color: var(--danger); }
+  label.chk { display: flex; gap: 10px; align-items: center; padding: 6px 0; }
+  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 120px); z-index: 2000; background: #1f2421; color: #fff;
+           padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: calc(100% - 32px); opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: .95; }
+  .wp-icon { width: 26px; height: 26px; border-radius: 50%; background: var(--route); color: #fff; border: 2px solid #fff; display: grid; place-items: center; font: 600 11px system-ui; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+  .wp-icon.start { background: #2f6b3f; }
+  .wp-icon.end { background: #1d3557; }
+  .leaflet-control-attribution { font-size: 9px; }
+  .leaflet-bottom { bottom: 96px; }
+
+  /* 넓은 화면: 시트를 왼쪽 패널로 */
+  @media (min-width: 900px) {
+    .sheet { top: 0; right: auto; width: 360px; max-height: none; border-radius: 0; }
+    .sheet .grip { cursor: default; padding-top: 16px; }
+    .sheet .grip::before { display: none; }
+    .sheet .body { display: block; }
+    #map { left: 360px; }
+    .top { left: 376px; }
+    .leaflet-bottom { bottom: 0; }
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="top">
+  <form class="search" id="searchForm">
+    <input type="search" id="q" placeholder="장소 검색 (예: 고당봉, 범어사, 북문)" enterkeyhint="search">
+    <button type="submit">검색</button>
+  </form>
+  <ul id="results"></ul>
+</div>
+
+<div class="fabs">
+  <button class="fab" id="locBtn" title="내 위치">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+  </button>
+  <button class="fab on" id="editBtn" title="지점 추가 켜기/끄기">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+  <button class="fab text" id="modeBtn" title="연결 방식"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20c4-2 3-8 8-8s4-6 8-8"/></svg><small id="modeLbl">등산로</small></button>
+  <button class="fab" id="undoBtn" title="마지막 지점 취소">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
+  </button>
+</div>
+
+<div class="sheet" id="sheet">
+  <div class="grip" id="grip">
+    <div class="summary">
+      <div><b id="sDist">0.0 km</b><span>거리</span></div>
+      <div><b id="sTime">-</b><span>예상 시간</span></div>
+      <div><b id="sUp">0 m</b><span>오르막</span></div>
+      <div><b id="sMax">-</b><span>최고 고도</span></div>
+    </div>
+    <div id="status"></div>
+  </div>
+  <div class="body">
+    <div class="tabs">
+      <button data-tab="course" class="on">코스</button>
+      <button data-tab="saved">저장된 코스</button>
+      <button data-tab="settings">설정</button>
+    </div>
+
+    <div class="pane on" data-pane="course">
+      <div class="chart-box">
+        <canvas id="chart"></canvas>
+        <div class="chart-empty" id="chartEmpty">지점을 2개 이상 찍으면 고도 그래프가 나와요</div>
+      </div>
+      <h2>코스 이름</h2>
+      <input type="text" id="routeName" placeholder="예: 금정산 범어사-고당봉">
+      <div class="row">
+        <button class="btn primary" id="shareBtn" disabled>워치 앱으로 보내기</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="saveBtn" disabled>코스 저장</button>
+        <button class="btn" id="dlBtn" disabled>GPX 저장</button>
+      </div>
+      <p class="hint">"워치 앱으로 보내기"를 누르고 공유 목록에서 Zepp을 고르세요. 공유 창이 안 뜨면 GPX 파일로 저장돼요.</p>
+      <h2>지점 <span style="font-weight:400">(지도 마커를 끌어서 옮길 수 있어요)</span></h2>
+      <ul class="list" id="wplist"></ul>
+      <div class="row">
+        <button class="btn" id="reverse">방향 뒤집기</button>
+        <button class="btn" id="clear">전체 지우기</button>
+      </div>
+    </div>
+
+    <div class="pane" data-pane="saved">
+      <ul class="list" id="savedList"></ul>
+      <div class="row">
+        <button class="btn" id="importBtn">GPX 파일 불러오기</button>
+        <input type="file" id="importFile" accept=".gpx,application/gpx+xml,application/xml,text/xml" hidden>
+      </div>
+      <p class="hint">불러온 GPX는 주황색 점선으로 표시돼요. 참고하면서 위에 새 코스를 그릴 수 있어요.</p>
+      <div id="importInfo" class="hint"></div>
+    </div>
+
+    <div class="pane" data-pane="settings">
+      <h2>배경 지도</h2>
+      <label class="chk"><input type="radio" name="base" value="topo" checked> 등산 지도 (등고선)</label>
+      <label class="chk"><input type="radio" name="base" value="osm"> 일반 지도</label>
+      <label class="chk"><input type="radio" name="base" value="sat"> 위성사진</label>
+      <h2>검증용 레이어</h2>
+      <label class="chk"><input type="checkbox" id="wmtToggle" checked> OSM 등산로 표시</label>
+      <h2>산림청 공식 등산로 (브이월드 키 필요)</h2>
+      <div class="row" style="margin-top:0">
+        <input type="password" id="vwKey" placeholder="브이월드 인증키" style="flex:3">
+        <button class="btn" id="vwApply">적용</button>
+      </div>
+      <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
+      <h2>앱 설치</h2>
+      <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
+      <button class="btn" id="installBtn" hidden>앱 설치하기</button>
+      <p class="hint" style="margin-top:16px">지도 © OpenStreetMap 기여자, OpenTopoMap, Esri · 경로 탐색 BRouter · 검색 Nominatim</p>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
+};
+function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+let toastTimer;
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600); }
+function setStatus(msg, err) { const s = $('status'); s.textContent = msg || ''; s.className = err ? 'err' : ''; }
+
+// ---------- map ----------
+const map = L.map('map', { zoomControl: false }).setView([35.2795, 129.0560], 14); // 금정산
+const bases = {
+  topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: '© OpenStreetMap, SRTM | © OpenTopoMap' }),
+  osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap 기여자' }),
+  sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery © Esri' }),
+};
+const wmt = L.tileLayer('https://tile.waymarkedtrails.org/hiking/{z}/{x}/{y}.png', { maxZoom: 18, opacity: 0.8, attribution: '© waymarkedtrails.org' });
+let base = bases.topo; base.addTo(map); wmt.addTo(map);
+L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
+let vwLayer = null;
+
+// ---------- state ----------
+let mode = 'auto';
+let editing = true;
+const waypoints = []; // {lat,lng,name,marker}
+const segments = [];  // {mode, coords:[[lat,lng,ele|null]], pending, error}
+const routeLayer = L.layerGroup().addTo(map);
+let refLayer = null, refTrack = null;
+let hoverMarker = null;
+
+// ---------- waypoints ----------
+function makeIcon(i, n) {
+  const cls = i === 0 ? 'start' : (i === n - 1 && n > 1 ? 'end' : '');
+  const label = i === 0 ? '출' : (i === n - 1 && n > 1 ? '도' : String(i));
+  return L.divIcon({ className: '', html: `<div class="wp-icon ${cls}">${label}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
+}
+
+function createMarker(wp) {
+  wp.marker = L.marker([wp.lat, wp.lng], { draggable: true }).addTo(map);
+  wp.marker.on('dragend', () => {
+    const p = wp.marker.getLatLng(); wp.lat = p.lat; wp.lng = p.lng; wp.name = '';
+    const i = waypoints.indexOf(wp);
+    if (i > 0) computeSegment(i - 1);
+    if (i < segments.length) computeSegment(i);
+    refreshList();
+  });
+  wp.marker.on('contextmenu', () => removeWaypoint(waypoints.indexOf(wp)));
+}
+
+function addWaypoint(lat, lng, name) {
+  const wp = { lat, lng, name: name || '' };
+  createMarker(wp);
+  waypoints.push(wp);
+  if (waypoints.length > 1) {
+    segments.push({ mode, coords: [] });
+    computeSegment(segments.length - 1);
+  }
+  refreshMarkers(); refreshList(); render();
+}
+
+function removeWaypoint(i) {
+  if (i < 0 || i >= waypoints.length) return;
+  map.removeLayer(waypoints[i].marker);
+  waypoints.splice(i, 1);
+  if (segments.length) {
+    if (i === 0) segments.splice(0, 1);
+    else if (i >= segments.length) segments.splice(i - 1, 1);
+    else { const m = segments[i - 1].mode; segments.splice(i - 1, 2, { mode: m, coords: [] }); computeSegment(i - 1); }
+  }
+  refreshMarkers(); refreshList(); render();
+}
+
+function clearRoute() {
+  waypoints.forEach(w => map.removeLayer(w.marker));
+  waypoints.length = 0; segments.length = 0;
+  refreshList(); render(); setStatus('');
+}
+
+function refreshMarkers() { waypoints.forEach((wp, i) => wp.marker.setIcon(makeIcon(i, waypoints.length))); }
+
+function refreshList() {
+  const ul = $('wplist'); ul.innerHTML = '';
+  if (!waypoints.length) { ul.innerHTML = '<li class="empty">지도를 누르거나 장소를 검색해서 출발점을 추가하세요.</li>'; return; }
+  waypoints.forEach((wp, i) => {
+    const li = document.createElement('li');
+    const label = i === 0 ? '출' : (i === waypoints.length - 1 && i > 0 ? '도' : i);
+    const seg = i > 0 ? segments[i - 1] : null;
+    li.innerHTML = `<span class="n"></span><span class="name"></span><span class="mode"></span><button>삭제</button>`;
+    li.querySelector('.n').textContent = label;
+    li.querySelector('.name').textContent = wp.name || `${wp.lat.toFixed(5)}, ${wp.lng.toFixed(5)}`;
+    li.querySelector('.mode').textContent = seg ? (seg.mode === 'auto' ? '등산로' : '직선') + (seg.error ? ' ⚠' : '') : '';
+    li.querySelector('.name').onclick = () => map.panTo([wp.lat, wp.lng]);
+    li.querySelector('button').onclick = () => removeWaypoint(i);
+    ul.appendChild(li);
+  });
+}
+
+// ---------- routing ----------
+let reqSeq = 0;
+async function computeSegment(si) {
+  const seg = segments[si];
+  const a = waypoints[si], b = waypoints[si + 1];
+  if (!seg || !a || !b) return;
+  seg.error = null;
+  if (seg.mode === 'line') { seg.coords = [[a.lat, a.lng, null], [b.lat, b.lng, null]]; render(); return; }
+  const token = ++reqSeq; seg.token = token; seg.pending = true;
+  seg.coords = [[a.lat, a.lng, null], [b.lat, b.lng, null]];
+  render(); setStatus('경로 탐색 중…');
+  try {
+    const url = `https://brouter.de/brouter?lonlats=${a.lng},${a.lat}|${b.lng},${b.lat}&profile=hiking-mountain&alternativeidx=0&format=geojson`;
+    const res = await fetch(url);
+    const txt = await res.text();
+    if (!res.ok || txt.trim()[0] !== '{') throw new Error(txt.slice(0, 120));
+    const gj = JSON.parse(txt);
+    if (seg.token !== token) return;
+    seg.coords = gj.features[0].geometry.coordinates.map(c => [c[1], c[0], c[2] ?? null]);
+    const gapA = haversine(a.lat, a.lng, seg.coords[0][0], seg.coords[0][1]);
+    const gapB = haversine(b.lat, b.lng, seg.coords.at(-1)[0], seg.coords.at(-1)[1]);
+    if (gapA > 150 || gapB > 150) seg.error = '찍은 지점 근처에 등산로가 없어요';
+    setStatus(seg.error || '', !!seg.error);
+  } catch (e) {
+    if (seg.token !== token) return;
+    seg.error = navigator.onLine ? '경로를 찾지 못했어요. 직선으로 표시해요.' : '인터넷이 끊겨 직선으로 표시해요.';
+    setStatus(seg.error, true);
+  }
+  seg.pending = false;
+  refreshList(); render();
+}
+
+// ---------- geometry ----------
+function haversine(la1, lo1, la2, lo2) {
+  const R = 6371000, r = Math.PI / 180;
+  const dLa = (la2 - la1) * r, dLo = (lo2 - lo1) * r;
+  const h = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// 모든 구간을 이어 하나의 트랙으로. 직선 구간 고도는 양 끝 고도로 보간.
+function fullTrack() {
+  const pts = [];
+  segments.forEach((s, i) => {
+    const c = s.coords.map(p => p.slice());
+    if (i > 0 && pts.length) c.shift();
+    pts.push(...c);
+  });
+  for (let i = 0; i < pts.length; i++) {
+    if (pts[i][2] != null) continue;
+    let j = i; while (j < pts.length && pts[j][2] == null) j++;
+    const prev = i > 0 ? pts[i - 1][2] : (j < pts.length ? pts[j][2] : null);
+    const next = j < pts.length ? pts[j][2] : prev;
+    if (prev == null) break;
+    let total = 0; const dists = [];
+    for (let k = i; k <= Math.min(j, pts.length - 1); k++) {
+      const p0 = pts[k - 1] || pts[k];
+      total += haversine(p0[0], p0[1], pts[k][0], pts[k][1]); dists.push(total);
+    }
+    for (let k = i; k < j; k++) pts[k][2] = prev + (next - prev) * (total ? dists[k - i] / total : 0);
+    i = j - 1;
+  }
+  return pts;
+}
+
+function trackStats(pts) {
+  let dist = 0, up = 0, down = 0, hours = 0, max = -Infinity, min = Infinity;
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) {
+    const d = haversine(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+    dist += d; cum.push(dist);
+    const e0 = pts[i - 1][2], e1 = pts[i][2];
+    if (d > 0) {
+      const slope = (e0 != null && e1 != null) ? (e1 - e0) / d : 0;
+      const kmh = 6 * Math.exp(-3.5 * Math.abs(slope + 0.05)) * 0.85; // Tobler, 산길 보정
+      hours += (d / 1000) / Math.max(kmh, 0.5);
+    }
+  }
+  // 오르내림: 5 m 히스테리시스로 지형 데이터 잡음 제거
+  let ref = null;
+  for (const p of pts) {
+    if (p[2] == null) continue;
+    max = Math.max(max, p[2]); min = Math.min(min, p[2]);
+    if (ref == null) { ref = p[2]; continue; }
+    const diff = p[2] - ref;
+    if (diff >= 5) { up += diff; ref = p[2]; } else if (diff <= -5) { down -= diff; ref = p[2]; }
+  }
+  return { dist, up, down, hours, max, min, cum };
+}
+
+function fmtTime(h) {
+  if (!isFinite(h) || h <= 0) return '-';
+  const m = Math.round(h * 60);
+  return m >= 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분` : `${m}분`;
+}
+
+// ---------- render ----------
+let current = { pts: [], stats: null };
+function render() {
+  routeLayer.clearLayers();
+  segments.forEach(s => {
+    if (s.coords.length < 2) return;
+    L.polyline(s.coords.map(p => [p[0], p[1]]), {
+      color: css('--route'), weight: 5, opacity: s.pending ? 0.4 : 0.9,
+      dashArray: (s.mode === 'line' || s.error) ? '8 8' : null,
+    }).addTo(routeLayer);
+  });
+  const pts = segments.length ? fullTrack() : (refTrack || []);
+  const stats = pts.length > 1 ? trackStats(pts) : null;
+  current = { pts, stats };
+  $('sDist').textContent = stats ? (stats.dist / 1000).toFixed(2) + ' km' : '0.0 km';
+  $('sTime').textContent = stats ? fmtTime(stats.hours) : '-';
+  $('sUp').textContent = stats ? Math.round(stats.up) + ' m' : '0 m';
+  $('sMax').textContent = stats && isFinite(stats.max) ? Math.round(stats.max) + ' m' : '-';
+  const has = segments.length > 0;
+  ['shareBtn', 'saveBtn', 'dlBtn'].forEach(id => $(id).disabled = !has);
+  drawChart();
+}
+
+// ---------- elevation chart ----------
+const canvas = $('chart');
+const pad = { l: 42, r: 10, t: 16, b: 22 };
+function drawChart(hoverIdx) {
+  const { pts, stats } = current;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (!W || !H) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+  const hasEle = stats && isFinite(stats.max);
+  $('chartEmpty').style.display = hasEle ? 'none' : 'grid';
+  if (!hasEle) return;
+  const lo = Math.floor((stats.min - 20) / 50) * 50, hi = Math.ceil((stats.max + 20) / 50) * 50;
+  const x = d => pad.l + (W - pad.l - pad.r) * (d / stats.dist);
+  const y = e => H - pad.b - (H - pad.t - pad.b) * ((e - lo) / (hi - lo));
+  ctx.font = '11px system-ui'; ctx.fillStyle = css('--muted'); ctx.strokeStyle = css('--line'); ctx.lineWidth = 1;
+  const step = (hi - lo) > 600 ? 200 : (hi - lo) > 250 ? 100 : 50;
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (let e = lo; e <= hi; e += step) { ctx.beginPath(); ctx.moveTo(pad.l, y(e)); ctx.lineTo(W - pad.r, y(e)); ctx.stroke(); ctx.fillText(e + 'm', pad.l - 5, y(e)); }
+  const km = stats.dist / 1000, kstep = km > 15 ? 5 : km > 6 ? 2 : km > 2 ? 1 : 0.5;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  for (let k = 0; k <= km + 1e-9; k += kstep) ctx.fillText(k + 'km', x(k * 1000), H - pad.b + 5);
+  ctx.beginPath();
+  pts.forEach((p, i) => { const X = x(stats.cum[i]), Y = y(p[2] ?? lo); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
+  const route = css('--route');
+  ctx.strokeStyle = route; ctx.lineWidth = 2; ctx.stroke();
+  ctx.lineTo(x(stats.dist), H - pad.b); ctx.lineTo(x(0), H - pad.b); ctx.closePath();
+  ctx.globalAlpha = 0.15; ctx.fillStyle = route; ctx.fill(); ctx.globalAlpha = 1;
+  if (hoverIdx != null) {
+    const p = pts[hoverIdx], X = x(stats.cum[hoverIdx]), Y = y(p[2]);
+    ctx.strokeStyle = css('--muted'); ctx.beginPath(); ctx.moveTo(X, pad.t); ctx.lineTo(X, H - pad.b); ctx.stroke();
+    ctx.fillStyle = route; ctx.beginPath(); ctx.arc(X, Y, 4, 0, 7); ctx.fill();
+    const label = `${(stats.cum[hoverIdx] / 1000).toFixed(2)} km · ${Math.round(p[2])} m`;
+    ctx.font = '600 12px system-ui'; ctx.fillStyle = css('--text');
+    const right = X > W - 120;
+    ctx.textAlign = right ? 'right' : 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(label, X + (right ? -8 : 8), 0);
+  }
+}
+function chartHover(clientX) {
+  const { pts, stats } = current; if (!stats || !isFinite(stats.max)) return;
+  const r = canvas.getBoundingClientRect();
+  const d = ((clientX - r.left - pad.l) / (r.width - pad.l - pad.r)) * stats.dist;
+  let idx = 0; while (idx < stats.cum.length - 1 && stats.cum[idx] < d) idx++;
+  drawChart(idx);
+  const p = pts[idx];
+  if (!hoverMarker) hoverMarker = L.circleMarker([p[0], p[1]], { radius: 7, color: '#fff', weight: 2, fillColor: css('--route'), fillOpacity: 1 }).addTo(map);
+  else hoverMarker.setLatLng([p[0], p[1]]);
+}
+function chartLeave() { drawChart(); if (hoverMarker) { map.removeLayer(hoverMarker); hoverMarker = null; } }
+canvas.addEventListener('pointermove', (e) => chartHover(e.clientX));
+canvas.addEventListener('pointerdown', (e) => chartHover(e.clientX));
+canvas.addEventListener('pointerleave', chartLeave);
+window.addEventListener('resize', () => drawChart());
+
+// ---------- sheet & tabs ----------
+const sheet = $('sheet');
+$('grip').onclick = () => { sheet.classList.toggle('open'); requestAnimationFrame(() => drawChart()); };
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.dataset.pane === b.dataset.tab));
+  if (b.dataset.tab === 'saved') refreshSaved();
+  if (b.dataset.tab === 'course') requestAnimationFrame(() => drawChart());
+});
+function openTab(name) { sheet.classList.add('open'); document.querySelector(`.tabs button[data-tab="${name}"]`).click(); }
+
+// ---------- search ----------
+$('searchForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = $('q').value.trim(); if (!q) return;
+  $('q').blur();
+  const ul = $('results'); ul.innerHTML = '<li>검색 중…</li>';
+  const b = map.getBounds().pad(1);
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=6&countrycodes=kr&accept-language=ko&viewbox=${b.getWest()},${b.getNorth()},${b.getEast()},${b.getSouth()}&q=${encodeURIComponent(q)}`;
+  try {
+    const list = await (await fetch(url)).json();
+    ul.innerHTML = '';
+    if (!list.length) { ul.innerHTML = '<li>결과가 없어요. 짧게 검색하거나 지도에서 직접 찍어 주세요.</li>'; setTimeout(() => ul.innerHTML = '', 3000); return; }
+    list.forEach(r => {
+      const li = document.createElement('li');
+      const [first, ...rest] = r.display_name.split(', ');
+      li.innerHTML = '<span></span><small></small>';
+      li.querySelector('span').textContent = first;
+      li.querySelector('small').textContent = rest.slice(0, 3).join(', ');
+      li.onclick = () => { addWaypoint(+r.lat, +r.lon, first); map.panTo([+r.lat, +r.lon]); ul.innerHTML = ''; $('q').value = ''; };
+      ul.appendChild(li);
+    });
+  } catch { ul.innerHTML = '<li>검색에 실패했어요. 인터넷 연결을 확인하세요.</li>'; }
+});
+map.on('movestart', () => { if ($('results').children.length) $('results').innerHTML = ''; });
+
+// ---------- map controls ----------
+map.on('click', (e) => { if (editing) addWaypoint(e.latlng.lat, e.latlng.lng); });
+$('editBtn').onclick = () => {
+  editing = !editing; $('editBtn').classList.toggle('on', editing);
+  toast(editing ? '지도를 누르면 지점이 추가돼요' : '지점 추가 꺼짐 (지도만 보기)');
+};
+$('modeBtn').onclick = () => {
+  mode = mode === 'auto' ? 'line' : 'auto';
+  $('modeLbl').textContent = mode === 'auto' ? '등산로' : '직선';
+  $('modeBtn').classList.toggle('on', mode === 'line');
+  toast(mode === 'auto' ? '다음 구간은 등산로를 따라 이어져요' : '다음 구간은 직선으로 이어져요');
+};
+$('undoBtn').onclick = () => removeWaypoint(waypoints.length - 1);
+$('clear').onclick = () => { if (!waypoints.length || confirm('코스를 모두 지울까요?')) clearRoute(); };
+$('reverse').onclick = () => {
+  waypoints.reverse(); segments.reverse(); segments.forEach(s => s.coords.reverse());
+  refreshMarkers(); refreshList(); render();
+};
+
+// 내 위치
+let meDot = null, meAcc = null, watchId = null, follow = false;
+$('locBtn').onclick = () => {
+  if (!navigator.geolocation) { toast('이 기기에서 위치를 쓸 수 없어요'); return; }
+  follow = true;
+  if (meDot) map.setView(meDot.getLatLng(), Math.max(map.getZoom(), 15));
+  if (watchId != null) return;
+  $('locBtn').classList.add('on');
+  watchId = navigator.geolocation.watchPosition((pos) => {
+    const ll = [pos.coords.latitude, pos.coords.longitude];
+    if (!meDot) {
+      meAcc = L.circle(ll, { radius: pos.coords.accuracy, color: css('--me'), weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map);
+      meDot = L.circleMarker(ll, { radius: 8, color: '#fff', weight: 3, fillColor: css('--me'), fillOpacity: 1, interactive: false }).addTo(map);
+    } else { meDot.setLatLng(ll); meAcc.setLatLng(ll).setRadius(pos.coords.accuracy); }
+    if (follow) { map.setView(ll, Math.max(map.getZoom(), 15)); follow = false; }
+  }, (err) => {
+    toast(err.code === 1 ? '위치 권한이 꺼져 있어요. 브라우저 설정에서 허용해 주세요.' : '위치를 가져오지 못했어요');
+    $('locBtn').classList.remove('on'); watchId = null;
+  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+};
+
+// 배경 지도, 레이어
+document.querySelectorAll('input[name=base]').forEach(r => r.onchange = () => {
+  map.removeLayer(base); base = bases[r.value]; base.addTo(map); base.bringToBack();
+});
+$('wmtToggle').onchange = (e) => e.target.checked ? wmt.addTo(map) : map.removeLayer(wmt);
+function applyVworld(key) {
+  if (vwLayer) { map.removeLayer(vwLayer); vwLayer = null; }
+  if (!key) return;
+  vwLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms', {
+    key, domain: location.hostname || 'localhost', layers: 'lt_l_frstclimb', styles: 'lt_l_frstclimb',
+    format: 'image/png', transparent: true, version: '1.3.0', opacity: 0.9, attribution: '산림청 등산로 · 브이월드',
+  }).addTo(map);
+}
+const savedKey = store.get('vwKey');
+if (savedKey) { $('vwKey').value = savedKey; applyVworld(savedKey); }
+$('vwApply').onclick = () => { const k = $('vwKey').value.trim(); store.set('vwKey', k); applyVworld(k); toast(k ? '산림청 등산로 레이어를 켰어요' : '레이어를 껐어요'); };
+
+// ---------- GPX ----------
+function esc(s) { return String(s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c])); }
+function routeName() { return $('routeName').value.trim() || '등산 코스'; }
+function buildGpx() {
+  const pts = fullTrack();
+  const name = routeName();
+  const wpts = waypoints.map((w, i) => `  <wpt lat="${w.lat.toFixed(7)}" lon="${w.lng.toFixed(7)}"><name>${esc(w.name || (i === 0 ? '출발' : i === waypoints.length - 1 ? '도착' : '지점 ' + i))}</name></wpt>`).join('\n');
+  const trk = pts.map(p => `      <trkpt lat="${p[0].toFixed(7)}" lon="${p[1].toFixed(7)}">${p[2] != null ? `<ele>${p[2].toFixed(1)}</ele>` : ''}</trkpt>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="등산 코스 메이커" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><name>${esc(name)}</name><time>${new Date().toISOString()}</time></metadata>
+${wpts}
+  <trk>
+    <name>${esc(name)}</name>
+    <trkseg>
+${trk}
+    </trkseg>
+  </trk>
+</gpx>`;
+}
+function gpxFileName() { return routeName().replace(/[\\/:*?"<>|]/g, '_') + '.gpx'; }
+function downloadGpx() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([buildGpx()], { type: 'application/gpx+xml' }));
+  a.download = gpxFileName();
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$('dlBtn').onclick = () => { downloadGpx(); toast('GPX를 저장했어요. 다운로드 알림이나 파일 앱에서 열어 Zepp을 고르세요.'); };
+$('shareBtn').onclick = async () => {
+  if (segments.some(s => s.pending)) { toast('경로 탐색이 끝나면 다시 눌러 주세요'); return; }
+  const gpx = buildGpx();
+  // 기기마다 허용하는 파일 형식이 달라서 몇 가지로 시도
+  const candidates = [
+    new File([gpx], gpxFileName(), { type: 'application/gpx+xml' }),
+    new File([gpx], gpxFileName(), { type: 'application/octet-stream' }),
+  ];
+  for (const file of candidates) {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: routeName() }); return; }
+      catch (e) { if (e.name === 'AbortError') return; }
+    }
+  }
+  downloadGpx();
+  toast('이 기기는 바로 공유가 안 돼서 GPX로 저장했어요. 다운로드 알림을 눌러 Zepp으로 여세요.');
+};
+
+// GPX 불러오기 (참고용 주황 점선)
+$('importBtn').onclick = () => $('importFile').click();
+$('importFile').onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const doc = new DOMParser().parseFromString(await f.text(), 'application/xml');
+  let nodes = [...doc.getElementsByTagName('trkpt')];
+  if (!nodes.length) nodes = [...doc.getElementsByTagName('rtept')];
+  const pts = nodes.map(n => {
+    const ele = n.getElementsByTagName('ele')[0];
+    return [+n.getAttribute('lat'), +n.getAttribute('lon'), ele ? +ele.textContent : null];
+  }).filter(p => isFinite(p[0]) && isFinite(p[1]));
+  if (pts.length < 2) { $('importInfo').textContent = '트랙 점을 찾지 못했어요.'; return; }
+  if (refLayer) map.removeLayer(refLayer);
+  refTrack = pts;
+  refLayer = L.polyline(pts.map(p => [p[0], p[1]]), { color: css('--ref'), weight: 4, dashArray: '6 6', opacity: 0.9 }).addTo(map);
+  map.fitBounds(refLayer.getBounds(), { padding: [30, 30] });
+  const s = trackStats(pts);
+  $('importInfo').textContent = `불러옴: ${f.name} · ${(s.dist / 1000).toFixed(2)} km · 오르막 ${Math.round(s.up)} m`;
+  render(); e.target.value = '';
+};
+
+// ---------- saved courses (이 기기에 저장) ----------
+function loadSaved() { try { return JSON.parse(store.get('courses') || '[]'); } catch { return []; } }
+$('saveBtn').onclick = () => {
+  const list = loadSaved();
+  const s = current.stats;
+  const entry = {
+    id: Date.now().toString(36), name: routeName(), savedAt: new Date().toISOString(),
+    dist: s ? s.dist : 0, up: s ? s.up : 0,
+    waypoints: waypoints.map(w => ({ lat: w.lat, lng: w.lng, name: w.name })),
+    segments: segments.map(sg => ({ mode: sg.mode, coords: sg.coords, error: sg.error || null })),
+  };
+  const same = list.findIndex(c => c.name === entry.name);
+  if (same >= 0) list.splice(same, 1);
+  list.unshift(entry);
+  toast(store.set('courses', JSON.stringify(list)) ? `"${entry.name}" 저장했어요` : '저장 공간이 부족해서 저장하지 못했어요');
+};
+function openCourse(c) {
+  clearRoute();
+  c.waypoints.forEach(w => { const wp = { ...w }; createMarker(wp); waypoints.push(wp); });
+  c.segments.forEach(sg => segments.push({ mode: sg.mode, coords: sg.coords, error: sg.error }));
+  $('routeName').value = c.name;
+  refreshMarkers(); refreshList(); render();
+  if (routeLayer.getLayers().length) map.fitBounds(L.featureGroup(routeLayer.getLayers()).getBounds(), { padding: [40, 40] });
+  openTab('course');
+}
+function refreshSaved() {
+  const ul = $('savedList'); ul.innerHTML = '';
+  const list = loadSaved();
+  if (!list.length) { ul.innerHTML = '<li class="empty">저장된 코스가 없어요. 코스 탭에서 "코스 저장"을 누르세요.</li>'; return; }
+  list.forEach(c => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="name"><span></span><small></small></span><button data-a="open">열기</button><button data-a="del">삭제</button>';
+    li.querySelector('.name > span').textContent = c.name;
+    li.querySelector('small').textContent = `${(c.dist / 1000).toFixed(2)} km · 오르막 ${Math.round(c.up)} m · ${new Date(c.savedAt).toLocaleDateString('ko-KR')}`;
+    li.querySelector('[data-a=open]').onclick = () => openCourse(c);
+    li.querySelector('[data-a=del]').onclick = () => {
+      if (!confirm(`"${c.name}"을(를) 삭제할까요?`)) return;
+      store.set('courses', JSON.stringify(loadSaved().filter(x => x.id !== c.id))); refreshSaved();
+    };
+    ul.appendChild(li);
+  });
+}
+
+// ---------- 앱 설치 & 오프라인 ----------
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; $('installBtn').hidden = false; });
+$('installBtn').onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; $('installBtn').hidden = true; };
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+window.addEventListener('offline', () => toast('오프라인이에요. 저장된 코스와 이미 본 지도만 보여요.'));
+
+refreshList(); render();
+</script>
+</body>
+</html>

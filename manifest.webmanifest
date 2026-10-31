@@ -1,0 +1,16 @@
+{
+  "name": "등산 코스 메이커",
+  "short_name": "코스메이커",
+  "description": "등산로를 따라 코스를 그리고 GPX로 내보내는 앱",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#161917",
+  "theme_color": "#2f6b3f",
+  "lang": "ko",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
