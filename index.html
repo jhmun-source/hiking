@@ -340,7 +340,7 @@
         </div>
         <div class="acc-list" id="accessOut"></div>
         <p class="hint">일출·일몰은 고른 날짜와 정상 위치·높이로 날마다 계산해요 (인터넷 없어도 됨). 예상 시간은 쉬는 시간 빼고 걷는 시간이에요.</p>
-        <p class="hint">날씨: Open-Meteo(여러 나라 예보 모델 종합), 정상 높이로 보정, 16일 안쪽만 나와요. 출발 전에는 <a href="https://mtweather.nifos.go.kr/" target="_blank" rel="noopener">산악기상정보시스템(산림청)</a>에서 한 번 더 확인하세요. 주차장·정류장: OpenStreetMap.</p>
+        <p class="hint">날씨: Open-Meteo(여러 나라 예보 모델 종합), 정상 높이로 보정, 16일 안쪽만 나와요. 출발 전에는 <a href="https://mtweather.nifos.go.kr/" target="_blank" rel="noopener">산악기상정보시스템(산림청)</a>에서 한 번 더 확인하세요. 주차장: 카카오맵, 정류장·역: OpenStreetMap.</p>
       </div>
     </div>
 
@@ -1858,7 +1858,46 @@ $('offClear').onclick = async () => {
   await caches.delete(SAVED_TILES); refreshOfflineInfo(); toast('저장한 지도를 지웠어요');
 };
 
-// ---------- 들머리 주차장·버스정류장 (OSM) ----------
+// ---------- 들머리 주차장·버스정류장 ----------
+// 주차장은 카카오(이름·주소가 거의 다 있음), 안 되면 OSM. 정류장·역은 OSM (카카오 장소 검색엔 정류장 분류가 없음)
+// 카카오 JavaScript 키는 웹페이지에 공개되는 키 (카카오 개발자 콘솔에 등록한 도메인에서만 작동)
+const KAKAO_JS_KEY = '7fb6148743bef6532a60dc7dc53982f1';
+let kakaoReady = null;
+function loadKakao() {
+  if (!kakaoReady) kakaoReady = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_JS_KEY}&libraries=services&autoload=false`;
+    s.onload = () => window.kakao?.maps ? kakao.maps.load(() => res(new kakao.maps.services.Places())) : rej();
+    s.onerror = rej;
+    document.head.appendChild(s);
+    setTimeout(rej, 8000);
+  }).catch(() => { kakaoReady = null; return null; }); // 실패하면 다음에 다시 시도
+  return kakaoReady;
+}
+async function kakaoCategory(code, e, r) {
+  const ps = await loadKakao();
+  if (!ps) throw new Error('kakao');
+  const list = await Promise.race([
+    new Promise((res, rej) => ps.categorySearch(code, (d, st) => st === kakao.maps.services.Status.ERROR ? rej() : res(d),
+      { location: new kakao.maps.LatLng(e.lat, e.lng), radius: r, sort: kakao.maps.services.SortBy.DISTANCE })),
+    new Promise((_, rej) => setTimeout(rej, 8000)),
+  ]);
+  return list.map(p => ({ id: 'k' + p.id, name: p.place_name, lat: +p.y, lng: +p.x, addr: p.road_address_name || p.address_name, phone: p.phone, url: p.place_url, extra: [] }));
+}
+// Nominatim 분류 검색(들머리 주변 상자 안). 이름이 빈 곳은 도로·동네 이름으로
+async function osmSearch(phrase, e, r) {
+  const dLat = r / 111000, dLng = r / (111000 * Math.cos(e.lat * Math.PI / 180));
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=40&bounded=1&extratags=1&addressdetails=1&accept-language=ko&q=${encodeURIComponent(phrase)}`
+    + `&viewbox=${e.lng - dLng},${e.lat + dLat},${e.lng + dLng},${e.lat - dLat}`;
+  return (await (await fetch(url)).json()).map(o => {
+    const t = o.extratags || {}, a = o.address || {};
+    const place = a.road || a.quarter || a.neighbourhood || a.village || a.suburb || a.hamlet || '';
+    return {
+      id: 'o' + o.osm_id, name: o.name, near: place, lat: +o.lat, lng: +o.lon,
+      extra: [t.fee === 'yes' ? '유료' : t.fee === 'no' ? '무료' : '', t.capacity ? `${t.capacity}대` : ''].filter(Boolean),
+    };
+  });
+}
 const accLayer = L.layerGroup().addTo(map);
 function resetAccess() { accLayer.clearLayers(); $('accessOut').innerHTML = ''; $('accessBtn').textContent = '주차장·정류장 보기'; }
 $('accessBtn').onclick = async () => {
@@ -1867,22 +1906,23 @@ $('accessBtn').onclick = async () => {
   const ends = [waypoints[0]];
   const last = waypoints.at(-1);
   if (haversine(ends[0].lat, ends[0].lng, last.lat, last.lng) > 500) ends.push(last); // 원점회귀가 아니면 날머리도
-  // Nominatim 분류 검색(들머리 주변 상자 안). 이용 규칙(초당 1회)에 맞춰 하나씩 차례로
   const kinds = [
-    ['parking', 1500, 12, 'P', '#1a73e8', '주차장'],
-    ['bus stop', 1500, 12, '🚌', '#2f6b3f', '버스정류장'],
-    ['railway station', 3000, 3, '🚉', '#7b2cbf', '역'],
+    { phrase: 'parking', kakao: 'PK6', r: 1500, max: 12, sym: 'P', color: '#1a73e8', label: '주차장' },
+    { phrase: 'bus stop', r: 1500, max: 12, sym: '🚌', color: '#2f6b3f', label: '버스정류장' },
+    { phrase: 'railway station', r: 3000, max: 3, sym: '🚉', color: '#7b2cbf', label: '역' },
   ];
   const btn = $('accessBtn'); btn.disabled = true; btn.textContent = '찾는 중…';
   const found = kinds.map(() => []);
-  let fail = 0, n = 0;
+  let fail = 0, n = 0, osmN = 0, usedOsmParking = false;
   for (const e of ends) {
-    for (const [k, [phrase, r]] of kinds.entries()) {
-      if (n++) await new Promise(res => setTimeout(res, 1100));
-      const dLat = r / 111000, dLng = r / (111000 * Math.cos(e.lat * Math.PI / 180));
-      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=40&bounded=1&extratags=1&accept-language=ko&q=${encodeURIComponent(phrase)}`
-        + `&viewbox=${e.lng - dLng},${e.lat + dLat},${e.lng + dLng},${e.lat - dLat}`;
-      try { found[k].push(...await (await fetch(url)).json()); } catch { fail++; }
+    for (const [k, kind] of kinds.entries()) {
+      n++;
+      if (kind.kakao) {
+        try { found[k].push(...await kakaoCategory(kind.kakao, e, kind.r)); continue; } catch { usedOsmParking = true; }
+      }
+      // Nominatim 이용 규칙(초당 1회)에 맞춰 하나씩 차례로
+      if (osmN++) await new Promise(res => setTimeout(res, 1100));
+      try { found[k].push(...await osmSearch(kind.phrase, e, kind.r)); } catch { fail++; }
     }
   }
   btn.disabled = false;
@@ -1891,33 +1931,39 @@ $('accessBtn').onclick = async () => {
   const near = (lat, lng) => Math.min(...ends.map(e => haversine(e.lat, e.lng, lat, lng)));
   const counts = [];
   const box = $('accessOut'); box.innerHTML = '';
-  for (const [k, [, , max, sym, color, label]] of kinds.entries()) {
+  for (const [k, { max, sym, color, label }] of kinds.entries()) {
     const seen = new Set();
-    const list = found[k].filter(e => !seen.has(e.osm_id) && seen.add(e.osm_id)).map(e => ({ e, lat: +e.lat, lng: +e.lon }))
-      .map(o => ({ ...o, d: near(o.lat, o.lng) })).sort((a, b) => a.d - b.d).slice(0, max);
+    const list = found[k].filter(p => !seen.has(p.id) && seen.add(p.id))
+      .map(p => ({ ...p, d: near(p.lat, p.lng) })).sort((a, b) => a.d - b.d).slice(0, max);
     counts.push(`${label} ${list.length}곳`);
     // 계획 탭에도 글자로 (가까운 순, 누르면 지도에서 그곳을 보여줌)
     const h3 = document.createElement('h3'); h3.textContent = `${sym} ${label} ${list.length ? list.length + '곳' : '— 못 찾음'}`; box.appendChild(h3);
-    for (const { e, lat, lng, d } of list) {
-      const t = { ...(e.extratags || {}), name: e.name };
+    for (const p of list) {
+      const name = p.name || (p.near ? `${p.near} 근처 ${label}` : `이름 없는 ${label}`);
+      const dist = p.d < 1000 ? Math.round(p.d) + ' m' : (p.d / 1000).toFixed(1) + ' km';
       const icon = L.divIcon({ className: '', html: `<div class="acc-icon" style="background:${color}">${sym}</div>`, iconSize: [24, 24], iconAnchor: [12, 12] });
       const div = document.createElement('div'); div.className = 'poi-pop';
-      const b = document.createElement('b'); b.textContent = t.name || label; div.appendChild(b);
+      const b = document.createElement('b'); b.textContent = name; div.appendChild(b);
       const s = document.createElement('span');
-      const dist = d < 1000 ? Math.round(d) + ' m' : (d / 1000).toFixed(1) + ' km';
-      const extra = [t.fee === 'yes' ? '유료' : t.fee === 'no' ? '무료' : '', t.capacity ? `${t.capacity}대` : ''].filter(Boolean);
-      s.textContent = [label, ...extra, `들머리에서 ${dist}`].join(' · ');
+      s.textContent = [label, ...p.extra, `들머리에서 ${dist}`].join(' · ');
       div.appendChild(s);
-      const mk = L.marker([lat, lng], { icon }).bindPopup(div).addTo(accLayer);
+      for (const line of [p.addr, p.phone]) {
+        if (!line) continue;
+        const x = document.createElement('span'); x.style.display = 'block'; x.textContent = line; div.appendChild(x);
+      }
+      if (p.url) {
+        const a = document.createElement('a'); a.href = p.url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = '카카오맵에서 보기'; div.appendChild(a);
+      }
+      const mk = L.marker([p.lat, p.lng], { icon }).bindPopup(div).addTo(accLayer);
       const row = document.createElement('button');
-      const nm = document.createElement('span'); nm.textContent = [t.name || `이름 없는 ${label}`, ...extra].join(' · ');
+      const nm = document.createElement('span'); nm.textContent = [name, ...p.extra].join(' · ');
       const ds = document.createElement('span'); ds.textContent = dist;
       row.append(nm, ds);
-      row.onclick = () => { if (sheetState() === 'full') setSheet('half'); map.setView([lat, lng], Math.max(map.getZoom(), 16)); mk.openPopup(); };
+      row.onclick = () => { if (sheetState() === 'full') setSheet('half'); map.setView([p.lat, p.lng], Math.max(map.getZoom(), 16)); mk.openPopup(); };
       box.appendChild(row);
     }
   }
-  toast(`${counts.join(', ')}을 찾았어요 (OSM 기준이라 빠진 곳이 있을 수 있어요)`);
+  toast(`${counts.join(', ')}을 찾았어요${usedOsmParking ? ' (카카오 연결이 안 돼서 주차장은 OSM 기준)' : ''}`);
 };
 
 // ---------- GPS 따라가기: 남은 거리, 코스 이탈 ----------
