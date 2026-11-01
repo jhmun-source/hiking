@@ -91,6 +91,7 @@
   .pane { display: none; } .pane.on { display: block; }
   h2 { font-size: 12px; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
   .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  .hint a { color: var(--accent); font-weight: 600; } /* 어두운 화면에서 기본 파란 링크는 안 보임 */
   input[type=text], input[type=password] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
   button.btn { font: inherit; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
   button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
@@ -129,6 +130,7 @@
   .wx-table td { padding: 5px 4px; border-top: 1px solid var(--line); white-space: nowrap; }
   .wx-table tr.summit td { background: rgba(108,190,127,.15); font-weight: 600; }
   .wx-table .rain { color: #4ea1ff; }
+  .wx-table .wx-label { font-size: 11px; color: var(--muted); white-space: normal; }
   .acc-list { font-size: 13px; margin-top: 6px; }
   .acc-list h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 8px 0 2px; }
   .acc-list button { display: flex; width: 100%; gap: 8px; justify-content: space-between; text-align: left; font: inherit; padding: 7px 2px; border: 0; border-top: 1px solid var(--line); background: none; color: var(--text); cursor: pointer; }
@@ -522,7 +524,7 @@ function addDestination(lat, lng, name) {
     map.setView([lat, lng], Math.max(map.getZoom(), 14));
     toast(`"${name}"을(를) 도착지로 정했어요. 출발할 곳을 지도에서 누르거나 내 위치 버튼을 눌러 주세요.`);
   } else {
-    map.fitBounds(L.latLngBounds(waypoints.map(w => [w.lat, w.lng])).pad(0.2));
+    fitPadded(L.latLngBounds(waypoints.map(w => [w.lat, w.lng])).pad(0.2));
     toast(`도착지: ${name}`);
   }
 }
@@ -1026,7 +1028,7 @@ function useMeAsStart(ll) {
   // 집처럼 먼 곳이면 등산로 경로를 만들 수 없어서 출발지로 쓰지 않음
   if (haversine(ll.lat, ll.lng, d.lat, d.lng) > 30000) { toast('지금 위치가 도착지에서 30 km 넘게 떨어져 있어서 출발지로 쓰지 않았어요. 지도에서 출발할 곳을 눌러 주세요.'); return; }
   addWaypoint(ll.lat, ll.lng, '내 위치');
-  map.fitBounds(L.latLngBounds(waypoints.map(w => [w.lat, w.lng])).pad(0.2));
+  fitPadded(L.latLngBounds(waypoints.map(w => [w.lat, w.lng])).pad(0.2));
 }
 $('locBtn').onclick = () => {
   if (!navigator.geolocation) { toast('이 기기에서 위치를 쓸 수 없어요'); return; }
@@ -1185,7 +1187,7 @@ function loadGpxText(text, fileName) {
     ?.getElementsByTagNameNS('*', 'name')[0]?.textContent.trim();
   refEndNames = [startName || '', goalName || ''];
   refLayer = L.polyline(pts.map(p => [p[0], p[1]]), { color: css('--ref'), weight: 4, dashArray: '6 6', opacity: 0.9 }).addTo(map);
-  map.fitBounds(refLayer.getBounds(), { padding: [30, 30] });
+  fitPadded(refLayer.getBounds());
   const s = trackStats(pts);
   $('importInfo').textContent = `불러옴: ${refName} · ${(s.dist / 1000).toFixed(2)} km · 오르막 ${Math.round(s.up)} m`;
   $('importActions').hidden = false;
@@ -1215,7 +1217,7 @@ function useImported() {
   routePois = pois; showRoutePois();
   $('routeName').value = name;
   refreshMarkers(); refreshList(); render();
-  map.fitBounds(L.featureGroup(routeLayer.getLayers()).getBounds(), { padding: [40, 40] });
+  fitPadded(L.featureGroup(routeLayer.getLayers()).getBounds());
   openTab('course');
   toast('불러온 GPX를 코스로 바꿨어요. 저장하거나 워치로 보낼 수 있어요.');
 };
@@ -1516,7 +1518,7 @@ async function runExtract(taps) {
   extractLayer = L.polyline(lls, { color: '#7b2cbf', weight: 3, dashArray: '4 6', opacity: 0.9, interactive: false }).addTo(map);
 
   if (waypoints.length && !confirm('지금 그리던 코스를 지우고 자동으로 따라 그린 코스로 바꿀까요?')) return;
-  map.fitBounds(extractLayer.getBounds(), { padding: [40, 40] });
+  fitPadded(extractLayer.getBounds());
   await fitRouteToLine(lls, tapIdx);
 }
 
@@ -1734,8 +1736,9 @@ $('planDate').onchange = () => updatePlan();
 $('planH').onchange = $('planM').onchange = () => { store.set('planTime', getPlanTime()); updatePlan(); };
 
 // 날씨: Open-Meteo (키 없음). 정상 높이로 보정한 예보에서 정상 도착 시각 + 산행 시간대 최저기온·최대 바람·비 확률
-const WX = [[0, '☀', '맑음'], [1, '🌤', '대체로 맑음'], [2, '⛅', '구름 조금'], [3, '☁', '흐림'], [48, '🌫', '안개'], [57, '🌦', '이슬비'],
-  [67, '🌧', '비'], [77, '🌨', '눈'], [82, '🌦', '소나기'], [86, '🌨', '눈 소나기'], [99, '⛈', '뇌우']];
+// ️: 폰에 따라 ☀·☁가 흑백 선 그림으로 나와서 컬러 그림으로 강제
+const WX = [[0, '☀️', '맑음'], [1, '🌤️', '대체로 맑음'], [2, '⛅️', '구름 조금'], [3, '☁️', '흐림'], [48, '🌫️', '안개'], [57, '🌦️', '이슬비'],
+  [67, '🌧️', '비'], [77, '🌨️', '눈'], [82, '🌦️', '소나기'], [86, '🌨️', '눈 소나기'], [99, '⛈️', '뇌우']];
 const wxOf = (code) => WX.find(([c]) => code <= c) || WX.at(-1);
 const wxCache = new Map();
 let wxTimer = null;
@@ -1786,12 +1789,12 @@ async function loadWeather() {
     const pp = data.precipitation_probability[i], mm = data.precipitation[i];
     const tag = i === ti ? ` ${p.label}` : i > b ? ' 하산 뒤' : '';
     const dayTag = data.time[i].slice(0, 10) !== data.time[a].slice(0, 10) && hh(i) === 0 ? '다음날 ' : '';
-    rows.push(`<tr${i === ti ? ' class="summit"' : ''}><td>${dayTag}${hh(i)}시<span class="sub">${tag}</span></td><td title="${label}">${icon}</td>`
+    rows.push(`<tr${i === ti ? ' class="summit"' : ''}><td>${dayTag}${hh(i)}시<span class="sub">${tag}</span></td><td>${icon} <span class="wx-label">${label}</span></td>`
       + `<td>${Math.round(data.temperature_2m[i])}° <span class="sub">(${Math.round(data.apparent_temperature[i])}°)</span></td>`
       + `<td>${Math.round(data.wind_speed_10m[i])}<span class="sub">/${Math.round(data.wind_gusts_10m[i])}</span></td>`
       + `<td class="${pp >= 30 || mm > 0 ? 'rain' : ''}">${pp ?? '-'}%${mm > 0 ? ` ${mm}mm` : ''}</td></tr>`);
   }
-  out.push(`<table class="wx-table"><tr><th>시각</th><th></th><th>기온(체감)</th><th>바람/돌풍 m/s</th><th>비</th></tr>${rows.join('')}</table>`);
+  out.push(`<table class="wx-table"><tr><th>시각</th><th>날씨</th><th>기온(체감)</th><th>바람/돌풍 m/s</th><th>비</th></tr>${rows.join('')}</table>`);
   el.innerHTML = out.join('');
 }
 
@@ -2011,7 +2014,7 @@ function openCourse(c) {
   showRoutePois();
   $('routeName').value = c.name;
   refreshMarkers(); refreshList(); render();
-  if (routeLayer.getLayers().length) map.fitBounds(L.featureGroup(routeLayer.getLayers()).getBounds(), { padding: [40, 40] });
+  if (routeLayer.getLayers().length) fitPadded(L.featureGroup(routeLayer.getLayers()).getBounds());
   openTab('course');
 }
 function refreshSaved() {
@@ -2074,8 +2077,14 @@ async function loadIndex() {
 function fitPadded(bounds) {
   // 패널에 가리지 않게 여백
   const wide = window.innerWidth >= 900;
-  map.fitBounds(bounds, wide ? { paddingTopLeft: [380, 70], paddingBottomRight: [20, 20] }
-    : { paddingTopLeft: [20, 70], paddingBottomRight: [70, sheet.offsetHeight + 20] });
+  // 폰에서 패널을 크게 펴 둔 채면 지도 보이는 곳이 거의 없어서 한반도 전체로 줌아웃되거나 엉뚱한 곳을 비춤 → 절반으로 내림
+  if (!wide && sheetState() === 'full') setSheet('half');
+  const mapH = map.getSize().y;
+  const bottom = Math.min(sheet.offsetHeight + 20, mapH - 70 - 150); // 코스가 들어갈 자리를 최소 150px 남김
+  const fit = () => map.fitBounds(bounds, wide ? { paddingTopLeft: [380, 70], paddingBottomRight: [20, 20] }
+    : { paddingTopLeft: [20, 70], paddingBottomRight: [70, Math.max(20, bottom)] });
+  // 앞의 줌 애니메이션이 도는 중이면 Leaflet이 새 이동을 무시함 (코스를 누르자마자 "이 코스로"를 누를 때) → 끝난 뒤 맞춤
+  if (map._animatingZoom) map.once('zoomend', fit); else fit();
 }
 function distToBox(c, b) {
   const lat = Math.min(Math.max(c.lat, b[0]), b[2]), lng = Math.min(Math.max(c.lng, b[1]), b[3]);
