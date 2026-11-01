@@ -118,10 +118,21 @@
   .wp-icon.start { background: #2f6b3f; }
   .wp-icon.end { background: #1d3557; }
   .leaflet-control-attribution { font-size: 9px; }
-  input[type=date], input[type=time] { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; min-width: 0; }
-  .plan-out { font-size: 14px; margin-top: 8px; }
+  input[type=date], .time-sel select { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; min-width: 0; }
+  .time-sel { display: flex; gap: 6px; }
+  .time-sel select:disabled { opacity: .7; }
+  .plan-out { font-size: 14px; margin-top: 8px; line-height: 1.5; }
   .plan-out:empty { display: none; }
   .plan-out div { padding: 2px 0; }
+  .wx-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .wx-table th { color: var(--muted); font-weight: 400; font-size: 11px; text-align: left; padding: 2px 4px; }
+  .wx-table td { padding: 5px 4px; border-top: 1px solid var(--line); white-space: nowrap; }
+  .wx-table tr.summit td { background: rgba(108,190,127,.15); font-weight: 600; }
+  .wx-table .rain { color: #4ea1ff; }
+  .acc-list { font-size: 13px; margin-top: 6px; }
+  .acc-list h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 8px 0 2px; }
+  .acc-list button { display: flex; width: 100%; gap: 8px; justify-content: space-between; text-align: left; font: inherit; padding: 7px 2px; border: 0; border-top: 1px solid var(--line); background: none; color: var(--text); cursor: pointer; }
+  .acc-list button span:last-child { color: var(--muted); flex: none; }
   .plan-out b { font-variant-numeric: tabular-nums; }
   .plan-out .warn { color: var(--danger); font-weight: 600; }
   .plan-out .sub { color: var(--muted); font-size: 12px; }
@@ -315,18 +326,19 @@
         </div>
         <div class="row">
           <input type="date" id="planDate">
-          <input type="time" id="planTime" value="08:00">
+          <div class="time-sel"><select id="planH" aria-label="출발 시"></select><select id="planM" aria-label="출발 분"></select></div>
         </div>
         <div class="plan-out" id="planOut"></div>
-        <h2>정상 날씨</h2>
+        <h2>정상 날씨 (시간별)</h2>
         <div class="plan-out" id="weatherOut"></div>
         <h2>산에 가기 전에</h2>
         <div class="row" style="margin-top:0">
           <button class="btn" id="offlineBtn">이 코스 지도 저장 (오프라인)</button>
           <button class="btn" id="accessBtn">주차장·정류장 보기</button>
         </div>
+        <div class="acc-list" id="accessOut"></div>
         <p class="hint">일출·일몰은 고른 날짜와 정상 위치·높이로 날마다 계산해요 (인터넷 없어도 됨). 예상 시간은 쉬는 시간 빼고 걷는 시간이에요.</p>
-        <p class="hint">날씨: Open-Meteo, 정상 높이 기준, 16일 안쪽만 나와요. 주차장·정류장: OpenStreetMap.</p>
+        <p class="hint">날씨: Open-Meteo(여러 나라 예보 모델 종합), 정상 높이로 보정, 16일 안쪽만 나와요. 출발 전에는 <a href="https://mtweather.nifos.go.kr/" target="_blank" rel="noopener">산악기상정보시스템(산림청)</a>에서 한 번 더 확인하세요. 주차장·정류장: OpenStreetMap.</p>
       </div>
     </div>
 
@@ -1646,11 +1658,26 @@ function sunTimes(day, lat, lng, elev, angle) {
 }
 const kst = (dt) => dt.toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false });
 const kstDate = (dt) => new Date(+dt + 9 * 3600e3).toISOString().slice(0, 10);
-const kstHour = (dt) => Math.min(23, new Date(+dt + 9.5 * 3600e3).getUTCHours()); // 가장 가까운 정시 (예보가 1시간 단위)
 const H = 3600e3;
 
 let planMode = store.get('planMode') || 'start';
-$('planTime').value = store.get('planTime') || '08:00';
+// 출발 시각: 시·분을 따로 고름 (시계 다이얼은 시를 누르면 바로 분으로 넘어가서 고치기 번거로움)
+const pad2 = (n) => String(n).padStart(2, '0');
+for (let h = 0; h < 24; h++) $('planH').add(new Option(`${pad2(h)}시`, pad2(h)));
+for (let m = 0; m < 60; m += 5) $('planM').add(new Option(`${pad2(m)}분`, pad2(m)));
+function setPlanTime(hhmm) {
+  const [h, m] = hhmm.split(':');
+  // 일출 계산값처럼 5분 단위가 아닌 분은 그때만 목록에 넣음
+  [...$('planM').options].forEach(o => o.dataset.extra && o.remove());
+  if (![...$('planM').options].some(o => o.value === m)) {
+    const o = new Option(`${m}분`, m); o.dataset.extra = 1;
+    const after = [...$('planM').options].find(x => x.value > m);
+    $('planM').add(o, after || null);
+  }
+  $('planH').value = h; $('planM').value = m;
+}
+const getPlanTime = () => `${$('planH').value}:${$('planM').value}`;
+setPlanTime(store.get('planTime') || '08:00');
 // 정상 = 코스에서 가장 높은 곳 (고도가 없으면 도착지)
 function planSummit() {
   const { pts, stats } = current;
@@ -1676,10 +1703,11 @@ function updatePlan() {
   let start;
   if (planMode === 'sunrise' && sun) {
     start = new Date(+sun.rise - top.h * H - 20 * 60e3); // 일출 20분 전 정상 도착
-    $('planTime').value = kst(start); $('planTime').disabled = true;
+    setPlanTime(kst(start)); $('planH').disabled = $('planM').disabled = true;
   } else {
-    $('planTime').disabled = false;
-    start = new Date(`${date}T${$('planTime').value || '08:00'}:00+09:00`);
+    if ($('planH').disabled) setPlanTime(store.get('planTime') || '08:00');
+    $('planH').disabled = $('planM').disabled = false;
+    start = new Date(`${date}T${getPlanTime()}:00+09:00`);
   }
   const atTop = new Date(+start + top.h * H), end = new Date(+start + stats.hours * H);
   const day = (dt) => kstDate(dt) < date ? '전날 ' : kstDate(dt) > date ? '다음날 ' : '';
@@ -1689,13 +1717,9 @@ function updatePlan() {
     out.push(`<div>☀ 일출 ${t(sun.rise)} · 일몰 ${t(sun.set)}</div>`);
     out.push(`<div class="sub">${top.label} ${ele ? Math.round(ele) + ' m ' : ''}기준 · 밝아짐 ${civil ? kst(civil.rise) : '-'} · 어두워짐 ${civil ? kst(civil.set) : '-'}</div>`);
   }
-  if (planMode === 'sunrise') {
-    out.push(`<div>${t(start)} 출발 → ${top.label} ${t(atTop)} 도착 <span class="sub">(일출 20분 전)</span></div>`);
-    out.push(`<div>하산 완료 약 ${t(end)} <span class="sub">· ${top.label}까지 ${fmtTime(top.h)}, 전체 ${fmtTime(stats.hours)}</span></div>`);
-  } else {
-    out.push(`<div>${t(start)} 출발 → ${top.label} ${t(atTop)} → 하산 완료 ${t(end)}</div>`);
-    out.push(`<div class="sub">${top.label}까지 ${fmtTime(top.h)}, 전체 ${fmtTime(stats.hours)} (쉬는 시간 빼고)</div>`);
-  }
+  // 두 방식 모두 같은 두 줄 (바꿔 봐도 줄이 흔들리지 않게)
+  out.push(`<div>${t(start)} 출발 → ${top.label} ${t(atTop)} → 하산 완료 ${t(end)}</div>`);
+  out.push(`<div class="sub">${planMode === 'sunrise' ? '일출 20분 전 도착 · ' : ''}${top.label}까지 ${fmtTime(top.h)}, 전체 ${fmtTime(stats.hours)}${planMode === 'sunrise' ? '' : ' (쉬는 시간 빼고)'}</div>`);
   if (sun) {
     if (civil && start < civil.rise) out.push('<div class="warn">출발할 때 아직 어두워요. 헤드랜턴을 꼭 챙기세요.</div>');
     if (end > sun.set) out.push(`<div class="warn">해 지기 전에 끝나지 않아요 (일몰 ${kst(sun.set)}). 일찍 출발하거나 짧은 코스를 고르세요.</div>`);
@@ -1707,7 +1731,7 @@ function updatePlan() {
 }
 document.querySelectorAll('#planMode button').forEach(b => b.onclick = () => { planMode = b.dataset.m; store.set('planMode', planMode); updatePlan(); });
 $('planDate').onchange = () => updatePlan();
-$('planTime').onchange = () => { store.set('planTime', $('planTime').value); updatePlan(); };
+$('planH').onchange = $('planM').onchange = () => { store.set('planTime', getPlanTime()); updatePlan(); };
 
 // 날씨: Open-Meteo (키 없음). 정상 높이로 보정한 예보에서 정상 도착 시각 + 산행 시간대 최저기온·최대 바람·비 확률
 const WX = [[0, '☀', '맑음'], [1, '🌤', '대체로 맑음'], [2, '⛅', '구름 조금'], [3, '☁', '흐림'], [48, '🌫', '안개'], [57, '🌦', '이슬비'],
@@ -1719,16 +1743,20 @@ function scheduleWeather() { clearTimeout(wxTimer); wxTimer = setTimeout(loadWea
 async function loadWeather() {
   const p = lastPlan, el = $('weatherOut');
   if (!p) { el.innerHTML = ''; return; }
-  const days = (new Date(`${p.date}T00:00:00+09:00`) - new Date(`${kstDate(new Date())}T00:00:00+09:00`)) / 864e5;
-  if (days < 0 || days > 15) { el.innerHTML = '<div class="sub">날씨 예보는 오늘부터 16일 안쪽 날짜만 나와요.</div>'; return; }
-  const key = `${p.date}|${p.lat.toFixed(2)}|${p.lng.toFixed(2)}|${Math.round(p.ele / 50)}`;
+  // 표는 출발 시각부터 하산 2시간 뒤까지 (그 뒤에 비 오는지도 보이게). 밤을 넘기는 산행은 이틀치를 받음
+  const d0 = kstDate(p.start), d1 = kstDate(new Date(+p.end + 2 * H));
+  const today = new Date(`${kstDate(new Date())}T00:00:00+09:00`);
+  const days = (dd) => (new Date(`${dd}T00:00:00+09:00`) - today) / 864e5;
+  if (days(d0) < 0 || days(d0) > 15) { el.innerHTML = '<div class="sub">날씨 예보는 오늘부터 16일 안쪽 날짜만 나와요.</div>'; return; }
+  const dEnd = days(d1) > 15 ? d0 : d1;
+  const key = `${d0}|${dEnd}|${p.lat.toFixed(2)}|${p.lng.toFixed(2)}|${Math.round(p.ele / 50)}`;
   let data = wxCache.get(key);
   if (!data) {
     el.innerHTML = '<div class="sub">날씨 불러오는 중…</div>';
     try {
       const url = `https://api.open-meteo.com/v1/forecast?latitude=${p.lat.toFixed(4)}&longitude=${p.lng.toFixed(4)}${p.ele ? `&elevation=${Math.round(p.ele)}` : ''}`
-        + '&hourly=temperature_2m,apparent_temperature,precipitation_probability,wind_speed_10m,wind_gusts_10m,weather_code'
-        + `&wind_speed_unit=ms&timezone=Asia%2FSeoul&start_date=${p.date}&end_date=${p.date}`;
+        + '&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,wind_speed_10m,wind_gusts_10m,weather_code'
+        + `&wind_speed_unit=ms&timezone=Asia%2FSeoul&start_date=${d0}&end_date=${dEnd}`;
       data = (await (await fetch(url)).json()).hourly;
       if (!data?.time) throw new Error();
       wxCache.set(key, data);
@@ -1738,18 +1766,32 @@ async function loadWeather() {
     }
   }
   if (lastPlan !== p) return;
-  // 날짜가 다른 시각(전날 밤 출발 등)은 그날 0시·23시로 맞춤
-  const hr = (dt) => kstDate(dt) < p.date ? 0 : kstDate(dt) > p.date ? 23 : kstHour(dt);
-  const ti = hr(p.atTop), a = hr(p.start), b = hr(p.end);
+  // 예보 시각(YYYY-MM-DDTHH:00)으로 찾음. 출발은 그 시각이 든 정시부터, 정상은 가장 가까운 정시
+  const idx = (dt, round) => data.time.indexOf(`${kstDate(new Date(+dt + (round ? H / 2 : 0)))}T${pad2(new Date(+dt + 9 * H + (round ? H / 2 : 0)).getUTCHours())}:00`);
+  let a = idx(p.start), b = idx(p.end, true), ti = idx(p.atTop, true);
+  if (a < 0) a = 0; if (b < 0) b = data.time.length - 1; if (ti < 0) ti = a;
   const span = (arr) => arr.slice(a, b + 1).filter(v => v != null);
-  const [, icon, label] = wxOf(data.weather_code[ti]);
   const minT = Math.min(...span(data.apparent_temperature)), maxW = Math.max(...span(data.wind_gusts_10m)), rain = Math.max(...span(data.precipitation_probability));
-  const out = [`<div>${icon} ${p.label} ${ti}시: ${label} · <b>${Math.round(data.temperature_2m[ti])}°</b> (체감 ${Math.round(data.apparent_temperature[ti])}°) · 바람 ${Math.round(data.wind_speed_10m[ti])} m/s · 비 ${data.precipitation_probability[ti] ?? '-'}%</div>`,
-    `<div class="sub">산행 시간대(${a}~${b}시) 최저 체감 ${Math.round(minT)}° · 최대 돌풍 ${Math.round(maxW)} m/s · 비 확률 최대 ${rain}%</div>`];
+  const hh = (i) => +data.time[i].slice(11, 13);
+  const out = [`<div class="sub">산행 시간대(${hh(a)}~${hh(b)}시) 최저 체감 ${Math.round(minT)}° · 최대 돌풍 ${Math.round(maxW)} m/s · 비 확률 최대 ${rain}%</div>`];
   if (Math.max(...span(data.weather_code)) >= 95) out.push('<div class="warn">뇌우 예보가 있어요. 능선·정상은 위험하니 산행을 미루는 게 좋아요.</div>');
   if (maxW >= 14) out.push('<div class="warn">돌풍이 강해요. 능선·암릉 구간은 조심하세요.</div>');
   if (minT <= -10) out.push('<div class="warn">체감온도가 매우 낮아요. 방한 장비를 챙기세요.</div>');
   if (rain >= 60) out.push('<div class="warn">비(눈) 올 가능성이 높아요.</div>');
+  // 시간별 표: 산행 중 + 하산 뒤 2시간
+  const last = Math.min(data.time.length - 1, b + 2);
+  const rows = [];
+  for (let i = a; i <= last; i++) {
+    const [, icon, label] = wxOf(data.weather_code[i]);
+    const pp = data.precipitation_probability[i], mm = data.precipitation[i];
+    const tag = i === ti ? ` ${p.label}` : i > b ? ' 하산 뒤' : '';
+    const dayTag = data.time[i].slice(0, 10) !== data.time[a].slice(0, 10) && hh(i) === 0 ? '다음날 ' : '';
+    rows.push(`<tr${i === ti ? ' class="summit"' : ''}><td>${dayTag}${hh(i)}시<span class="sub">${tag}</span></td><td title="${label}">${icon}</td>`
+      + `<td>${Math.round(data.temperature_2m[i])}° <span class="sub">(${Math.round(data.apparent_temperature[i])}°)</span></td>`
+      + `<td>${Math.round(data.wind_speed_10m[i])}<span class="sub">/${Math.round(data.wind_gusts_10m[i])}</span></td>`
+      + `<td class="${pp >= 30 || mm > 0 ? 'rain' : ''}">${pp ?? '-'}%${mm > 0 ? ` ${mm}mm` : ''}</td></tr>`);
+  }
+  out.push(`<table class="wx-table"><tr><th>시각</th><th></th><th>기온(체감)</th><th>바람/돌풍 m/s</th><th>비</th></tr>${rows.join('')}</table>`);
   el.innerHTML = out.join('');
 }
 
@@ -1815,7 +1857,7 @@ $('offClear').onclick = async () => {
 
 // ---------- 들머리 주차장·버스정류장 (OSM) ----------
 const accLayer = L.layerGroup().addTo(map);
-function resetAccess() { accLayer.clearLayers(); $('accessBtn').textContent = '주차장·정류장 보기'; }
+function resetAccess() { accLayer.clearLayers(); $('accessOut').innerHTML = ''; $('accessBtn').textContent = '주차장·정류장 보기'; }
 $('accessBtn').onclick = async () => {
   if (accLayer.getLayers().length) { resetAccess(); return; }
   if (!waypoints.length) return;
@@ -1845,20 +1887,31 @@ $('accessBtn').onclick = async () => {
   btn.textContent = '주차장·정류장 숨기기';
   const near = (lat, lng) => Math.min(...ends.map(e => haversine(e.lat, e.lng, lat, lng)));
   const counts = [];
+  const box = $('accessOut'); box.innerHTML = '';
   for (const [k, [, , max, sym, color, label]] of kinds.entries()) {
     const seen = new Set();
     const list = found[k].filter(e => !seen.has(e.osm_id) && seen.add(e.osm_id)).map(e => ({ e, lat: +e.lat, lng: +e.lon }))
       .map(o => ({ ...o, d: near(o.lat, o.lng) })).sort((a, b) => a.d - b.d).slice(0, max);
     counts.push(`${label} ${list.length}곳`);
+    // 계획 탭에도 글자로 (가까운 순, 누르면 지도에서 그곳을 보여줌)
+    const h3 = document.createElement('h3'); h3.textContent = `${sym} ${label} ${list.length ? list.length + '곳' : '— 못 찾음'}`; box.appendChild(h3);
     for (const { e, lat, lng, d } of list) {
       const t = { ...(e.extratags || {}), name: e.name };
       const icon = L.divIcon({ className: '', html: `<div class="acc-icon" style="background:${color}">${sym}</div>`, iconSize: [24, 24], iconAnchor: [12, 12] });
       const div = document.createElement('div'); div.className = 'poi-pop';
       const b = document.createElement('b'); b.textContent = t.name || label; div.appendChild(b);
       const s = document.createElement('span');
-      s.textContent = [label, t.fee === 'yes' ? '유료' : t.fee === 'no' ? '무료' : '', t.capacity ? `${t.capacity}대` : '', `들머리에서 ${d < 1000 ? Math.round(d) + ' m' : (d / 1000).toFixed(1) + ' km'}`].filter(Boolean).join(' · ');
+      const dist = d < 1000 ? Math.round(d) + ' m' : (d / 1000).toFixed(1) + ' km';
+      const extra = [t.fee === 'yes' ? '유료' : t.fee === 'no' ? '무료' : '', t.capacity ? `${t.capacity}대` : ''].filter(Boolean);
+      s.textContent = [label, ...extra, `들머리에서 ${dist}`].join(' · ');
       div.appendChild(s);
-      L.marker([lat, lng], { icon }).bindPopup(div).addTo(accLayer);
+      const mk = L.marker([lat, lng], { icon }).bindPopup(div).addTo(accLayer);
+      const row = document.createElement('button');
+      const nm = document.createElement('span'); nm.textContent = [t.name || `이름 없는 ${label}`, ...extra].join(' · ');
+      const ds = document.createElement('span'); ds.textContent = dist;
+      row.append(nm, ds);
+      row.onclick = () => { if (sheetState() === 'full') setSheet('half'); map.setView([lat, lng], Math.max(map.getZoom(), 16)); mk.openPopup(); };
+      box.appendChild(row);
     }
   }
   toast(`${counts.join(', ')}을 찾았어요 (OSM 기준이라 빠진 곳이 있을 수 있어요)`);
