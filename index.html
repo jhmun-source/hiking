@@ -996,7 +996,7 @@ $('modeBtn').onclick = () => {
 };
 // 되돌리기: 도착지가 정해져 있으면 도착지는 두고 그 앞에 마지막으로 찍은 지점부터
 $('undoBtn').onclick = () => removeWaypoint(destLocked && waypoints.length > 1 ? waypoints.length - 2 : waypoints.length - 1);
-$('clear').onclick = () => { if (!waypoints.length || confirm('코스를 모두 지울까요?')) clearRoute(); };
+$('clear').onclick = () => { if (!waypoints.length || confirm('지금 지도에 그려진 코스를 지울까요?\n(저장 탭의 코스와 산·트레킹 목록은 그대로 남아요)')) clearRoute(); };
 $('reverse').onclick = () => {
   destLocked = false;
   waypoints.reverse(); segments.reverse(); segments.forEach(s => s.coords.reverse());
