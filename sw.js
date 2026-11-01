@@ -1,6 +1,7 @@
 // 앱 화면은 오프라인에서도 열리게, 지도 타일은 본 것만 캐시 (대량 다운로드 안 함)
-const SHELL_CACHE = 'shell-v4';
+const SHELL_CACHE = 'shell-v5';
 const TILE_CACHE = 'tiles-v1';
+const SAVED_TILES = 'tiles-saved'; // 계획 탭 "이 코스 지도 저장"으로 받은 지도 (자동으로 지우지 않음)
 const TILE_LIMIT = 3000;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
@@ -17,7 +18,7 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then(keys => Promise.all(
-    keys.filter(k => k !== SHELL_CACHE && k !== TILE_CACHE && k !== 'shared').map(k => caches.delete(k))
+    keys.filter(k => k !== SHELL_CACHE && k !== TILE_CACHE && k !== SAVED_TILES && k !== 'shared').map(k => caches.delete(k))
   )).then(() => self.clients.claim()));
 });
 
@@ -55,8 +56,9 @@ self.addEventListener('fetch', (e) => {
   const isVworldTile = url.hostname === 'api.vworld.kr' && /^\/req\/(wmts|wms)/.test(url.pathname);
   if (isVworldTile || TILE_HOSTS.some(h => url.hostname.endsWith(h))) {
     e.respondWith(caches.open(TILE_CACHE).then(async cache => {
-      const hit = await cache.match(req);
-      if (hit) return hit;
+      const hit = await (await caches.open(SAVED_TILES)).match(req) || await cache.match(req);
+      // 지도 화면이 받아 둔 타일(opaque)은 "지도 저장"의 cors 요청에 줄 수 없어서 새로 받음
+      if (hit && !(req.mode === 'cors' && hit.type === 'opaque')) return hit;
       const res = await fetch(req);
       // 브이월드는 키 오류도 200(XML)으로 돌려줘서 이미지일 때만 저장
       const isImage = (res.headers.get('content-type') || '').startsWith('image/');
