@@ -1712,7 +1712,10 @@ function updatePlan() {
     start = new Date(`${date}T${getPlanTime()}:00+09:00`);
   }
   const atTop = new Date(+start + top.h * H), end = new Date(+start + stats.hours * H);
-  const day = (dt) => kstDate(dt) < date ? '전날 ' : kstDate(dt) > date ? '다음날 ' : '';
+  const day = (dt) => {
+    const n = Math.round((new Date(`${kstDate(dt)}T00:00:00+09:00`) - new Date(`${date}T00:00:00+09:00`)) / 864e5);
+    return n === -1 ? '전날 ' : n === 1 ? '다음날 ' : n < 0 ? `${-n}일 전 ` : n > 0 ? `${n}일 뒤 ` : '';
+  };
   const t = (dt) => `<b>${day(dt)}${kst(dt)}</b>`;
   const out = [];
   if (sun) {
@@ -1722,6 +1725,8 @@ function updatePlan() {
   // 두 방식 모두 같은 두 줄 (바꿔 봐도 줄이 흔들리지 않게)
   out.push(`<div>${t(start)} 출발 → ${top.label} ${t(atTop)} → 하산 완료 ${t(end)}</div>`);
   out.push(`<div class="sub">${planMode === 'sunrise' ? '일출 20분 전 도착 · ' : ''}${top.label}까지 ${fmtTime(top.h)}, 전체 ${fmtTime(stats.hours)}${planMode === 'sunrise' ? '' : ' (쉬는 시간 빼고)'}</div>`);
+  // 하루에 못 끝나는 긴 길(정맥·둘레길 여러 구간)은 "정상 일출"이 의미가 없음
+  if (planMode === 'sunrise' && stats.hours > 14) out.push(`<div class="warn">하루에 끝나지 않는 긴 코스라 일출 보기 계산은 맞지 않아요. 구간을 나눠 쓰거나 "출발 시각으로 계산"을 쓰세요.</div>`);
   if (sun) {
     if (civil && start < civil.rise) out.push('<div class="warn">출발할 때 아직 어두워요. 헤드랜턴을 꼭 챙기세요.</div>');
     if (end > sun.set) out.push(`<div class="warn">해 지기 전에 끝나지 않아요 (일몰 ${kst(sun.set)}). 일찍 출발하거나 짧은 코스를 고르세요.</div>`);
@@ -1747,10 +1752,13 @@ async function loadWeather() {
   const p = lastPlan, el = $('weatherOut');
   if (!p) { el.innerHTML = ''; return; }
   // 표는 출발 시각부터 하산 2시간 뒤까지 (그 뒤에 비 오는지도 보이게). 밤을 넘기는 산행은 이틀치를 받음
-  const d0 = kstDate(p.start), d1 = kstDate(new Date(+p.end + 2 * H));
-  const today = new Date(`${kstDate(new Date())}T00:00:00+09:00`);
+  const todayStr = kstDate(new Date()), today = new Date(`${todayStr}T00:00:00+09:00`);
   const days = (dd) => (new Date(`${dd}T00:00:00+09:00`) - today) / 864e5;
-  if (days(d0) < 0 || days(d0) > 15) { el.innerHTML = '<div class="sub">날씨 예보는 오늘부터 16일 안쪽 날짜만 나와요.</div>'; return; }
+  const d1 = kstDate(new Date(+p.end + 2 * H));
+  if (days(d1) < 0) { el.innerHTML = '<div class="sub">이미 지난 일정이라 날씨 예보가 없어요. 날짜를 바꿔 보세요.</div>'; return; }
+  // 출발이 오늘보다 앞이면(긴 코스) 오늘부터 받음
+  const d0 = days(kstDate(p.start)) < 0 ? todayStr : kstDate(p.start);
+  if (days(d0) > 15) { el.innerHTML = '<div class="sub">날씨 예보는 오늘부터 16일 안쪽 날짜만 나와요.</div>'; return; }
   const dEnd = days(d1) > 15 ? d0 : d1;
   const key = `${d0}|${dEnd}|${p.lat.toFixed(2)}|${p.lng.toFixed(2)}|${Math.round(p.ele / 50)}`;
   let data = wxCache.get(key);
