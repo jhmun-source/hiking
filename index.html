@@ -2521,6 +2521,9 @@ $('fsTest').onclick = async () => {
     const authErr = doc.querySelector('returnAuthMsg')?.textContent || doc.querySelector('errMsg')?.textContent;
     out.textContent = code ? `결과 ${code} ${msg || ''} · 항목 ${items.length}개`
       : authErr?.includes('NOT_REGISTERED') ? '키가 아직 등록되지 않았어요. 승인 직후엔 1~2시간 뒤부터 동작하는 경우가 많아요. Decoding 키인지도 확인해 주세요.'
+      // 공공데이터포털: 키 없음 401, 이 API를 쓸 권한이 없는 키 403 (키가 틀렸거나 이 API 활용신청이 아직 승인 전)
+      : res.status === 403 ? '이 키로는 산림청 등산로 API를 쓸 수 없다고 나와요 (403). 공공데이터포털 마이페이지 → 활용신청 현황에서 이 API가 "승인"인지 확인해 주세요. 승인 직후면 1~2시간 뒤에 다시 눌러 보세요.'
+      : res.status === 401 ? '인증키가 전달되지 않았어요 (401). 키를 다시 붙여 넣어 주세요.'
       : `오류: ${authErr || res.status}`;
     // 등산로 파일을 앱에서 직접 받을 수 있는지(CORS)와 형식 확인
     for (const it of items.slice(0, 3)) {
