@@ -97,6 +97,7 @@
   button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   button.btn:disabled { opacity: .45; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  [hidden] { display: none !important; } /* .row 같은 display 지정이 hidden을 덮어쓰지 않게 */
   .row > * { flex: 1; }
   .chart-box { position: relative; height: 130px; margin-top: 4px; }
   #chart { width: 100%; height: 100%; display: block; touch-action: pan-y; }
@@ -346,13 +347,20 @@
 
     <div class="pane" data-pane="saved">
       <h2>저장된 코스</h2>
+      <div class="row" style="margin-top:0">
+        <input type="text" id="sSearch" placeholder="검색 (예: 온천천, 러닝)" style="flex:3">
+        <button class="btn" id="backupBtn">전체 백업</button>
+      </div>
       <ul class="list" id="savedList"></ul>
+      <p class="hint">전체 백업: 저장된 코스를 GPX 파일 하나(코스_백업_날짜.gpx)로 내려받아요. 폰을 바꾸거나 앱 데이터가 지워졌을 때 아래 "GPX 파일 불러오기"로 그 파일을 열면 코스가 다시 들어와요.</p>
 
       <h2>GPX 불러오기</h2>
       <div class="row" style="margin-top:0">
         <button class="btn" id="importBtn">GPX 파일 불러오기</button>
-        <input type="file" id="importFile" accept=".gpx,application/gpx+xml,application/xml,text/xml" hidden>
+        <input type="file" id="importFile" accept=".gpx,application/gpx+xml" hidden>
+        <input type="file" id="importAny" hidden>
       </div>
+      <p class="hint" style="margin-top:4px">파일 고르는 화면에 GPX만 보여요. 위쪽 돋보기로 "코스_" 나 "러닝"을 검색하면 이 앱에서 받은 파일만 모아 볼 수 있어요. 받은 GPX가 목록에 안 보이면 <a href="#" id="importAnyLink">모든 파일에서 고르기</a>.</p>
       <div id="importInfo" class="hint"></div>
       <div class="row" id="importActions" hidden>
         <button class="btn primary" id="importUse">이 GPX를 코스로 쓰기</button>
@@ -1110,6 +1118,7 @@ if (savedBase && bases[savedBase] && savedBase !== 'topo') {
 }
 
 // ---------- GPX ----------
+const BACKUP_NS = 'https://jhmun-source.github.io/hiking/backup'; // 전체 백업 파일 표시 (저장 탭)
 function esc(s) { return String(s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c])); }
 function routeName() { return $('routeName').value.trim() || '등산 코스'; }
 function buildGpx() {
@@ -1127,13 +1136,20 @@ function buildGpx() {
 ${wpts}
   <trk>
     <name>${esc(name)}</name>
+    <type>${courseKind()}</type>
     <trkseg>
 ${trk}
     </trkseg>
   </trk>
 </gpx>`;
 }
-function gpxFileName() { return routeName().replace(/[\\/:*?"<>|]/g, '_') + '.gpx'; }
+// 러닝 모드로 이은 거리가 등산로로 이은 거리보다 길면 러닝 코스 (가져온 GPX·직선은 셈에서 뺌)
+function courseKind(segs = segments) {
+  const len = (m) => segs.filter(s => s.mode === m).reduce((t, s) => t + s.coords.reduce((d, c, i) => i ? d + haversine(s.coords[i - 1][0], s.coords[i - 1][1], c[0], c[1]) : 0, 0), 0);
+  return len('run') > len('auto') ? '러닝' : '등산';
+}
+// 다운로드 폴더에서 한데 모이고 찾기 쉽게: 코스_이름_등산.gpx / 코스_이름_러닝.gpx
+function gpxFileName() { return `코스_${routeName().replace(/[\\/:*?"<>|]/g, '_')}_${courseKind()}.gpx`; }
 function downloadGpx() {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([buildGpx()], { type: 'application/gpx+xml' }));
@@ -1161,14 +1177,18 @@ $('shareBtn').onclick = async () => {
 
 // GPX 불러오기 (참고용 주황 점선)
 $('importBtn').onclick = () => $('importFile').click();
-$('importFile').onchange = async (e) => {
+// 다른 앱에서 받은 GPX는 기기가 파일 종류를 모르는 경우가 있어서 (그러면 GPX만 보기에서 안 보임) 전체 파일에서도 고를 수 있게
+$('importAnyLink').onclick = (e) => { e.preventDefault(); $('importAny').click(); };
+$('importFile').onchange = $('importAny').onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
   e.target.value = '';
   loadGpxText(await f.text(), f.name);
 };
-// GPX 글자 → 참고용 트랙(주황 점선). 성공하면 true
+// GPX 글자 → 참고용 트랙(주황 점선). 성공하면 true. 전체 백업 파일이면 저장 탭으로 복원
 function loadGpxText(text, fileName) {
   const doc = new DOMParser().parseFromString(text, 'application/xml');
+  const backup = doc.getElementsByTagNameNS(BACKUP_NS, 'courses')[0];
+  if (backup) { restoreBackup(backup.textContent); return true; }
   let nodes = [...doc.getElementsByTagName('trkpt')];
   if (!nodes.length) nodes = [...doc.getElementsByTagName('rtept')];
   const pts = nodes.map(n => {
@@ -1179,7 +1199,7 @@ function loadGpxText(text, fileName) {
   if (refLayer) map.removeLayer(refLayer);
   refTrack = pts;
   const trkName = doc.querySelector('trk > name, metadata > name')?.textContent.trim();
-  refName = trkName || fileName.replace(/\.gpx$/i, '');
+  refName = trkName || fileName.replace(/\.gpx$/i, '').replace(/^코스_(.+)_(등산|러닝)$/, '$1');
   // GPX 안의 지점(wpt)도 같이: 갈림길·봉우리 등 (너무 많으면 앞의 200개만)
   refEndNames = ['', ''];
   refPois = [...doc.getElementsByTagName('wpt')].slice(0, 200).map(w => ({
@@ -2063,7 +2083,7 @@ $('saveBtn').onclick = () => {
   const s = current.stats;
   const entry = {
     id: Date.now().toString(36), name: routeName(), savedAt: new Date().toISOString(),
-    dist: s ? s.dist : 0, up: s ? s.up : 0,
+    dist: s ? s.dist : 0, up: s ? s.up : 0, kind: courseKind(),
     waypoints: waypoints.map(w => ({ lat: w.lat, lng: w.lng, name: w.name })),
     segments: segments.map(sg => ({ mode: sg.mode, coords: sg.coords, error: sg.error || null })),
     pois: routePois,
@@ -2086,13 +2106,17 @@ function openCourse(c) {
 }
 function refreshSaved() {
   const ul = $('savedList'); ul.innerHTML = '';
-  const list = loadSaved();
-  if (!list.length) { ul.innerHTML = '<li class="empty">저장된 코스가 없어요. 코스 탭에서 "코스 저장"을 누르세요.</li>'; return; }
+  const all = loadSaved();
+  if (!all.length) { ul.innerHTML = '<li class="empty">저장된 코스가 없어요. 코스 탭에서 "코스 저장"을 누르세요.</li>'; return; }
+  // 띄어쓰기 무시하고 이름·종류(등산/러닝)로 찾기
+  const q = $('sSearch').value.replace(/\s+/g, '').toLowerCase();
+  const list = all.filter(c => !q || (c.name + savedKind(c)).replace(/\s+/g, '').toLowerCase().includes(q));
+  if (!list.length) { ul.innerHTML = '<li class="empty">찾는 코스가 없어요.</li>'; return; }
   list.forEach(c => {
     const li = document.createElement('li');
     li.innerHTML = '<span class="name"><span></span><small></small></span><button data-a="open">열기</button><button data-a="del">삭제</button>';
     li.querySelector('.name > span').textContent = c.name;
-    li.querySelector('small').textContent = `${(c.dist / 1000).toFixed(2)} km · 오르막 ${Math.round(c.up)} m · ${new Date(c.savedAt).toLocaleDateString('ko-KR')}`;
+    li.querySelector('small').textContent = `${savedKind(c)} · ${(c.dist / 1000).toFixed(2)} km · 오르막 ${Math.round(c.up)} m · ${new Date(c.savedAt).toLocaleDateString('ko-KR')}`;
     li.querySelector('[data-a=open]').onclick = () => openCourse(c);
     li.querySelector('[data-a=del]').onclick = () => {
       if (!confirm(`"${c.name}"을(를) 삭제할까요?`)) return;
@@ -2100,6 +2124,49 @@ function refreshSaved() {
     };
     ul.appendChild(li);
   });
+}
+// 종류를 기억하기 전에 저장한 코스는 구간으로 다시 판단
+function savedKind(c) { return c.kind || courseKind(c.segments || []); }
+$('sSearch').oninput = refreshSaved;
+
+// 전체 백업: 코스마다 <trk> 하나 (다른 앱에서도 GPX로 열림) + 이 앱이 되살릴 원본을 <extensions>에
+$('backupBtn').onclick = () => {
+  const list = loadSaved();
+  if (!list.length) { toast('저장된 코스가 없어요'); return; }
+  const trks = list.map(c => {
+    const pts = c.segments.flatMap((s, i) => i ? s.coords.slice(1) : s.coords);
+    return `  <trk>
+    <name>${esc(c.name)}</name>
+    <type>${savedKind(c)}</type>
+    <trkseg>
+${pts.map(p => `      <trkpt lat="${(+p[0]).toFixed(7)}" lon="${(+p[1]).toFixed(7)}">${p[2] != null ? `<ele>${(+p[2]).toFixed(1)}</ele>` : ''}</trkpt>`).join('\n')}
+    </trkseg>
+  </trk>`;
+  }).join('\n');
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="등산 코스 메이커" xmlns="http://www.topografix.com/GPX/1/1" xmlns:hcm="${BACKUP_NS}">
+  <metadata><name>코스 백업 (${list.length}개)</name><time>${new Date().toISOString()}</time></metadata>
+  <extensions><hcm:courses>${esc(JSON.stringify(list))}</hcm:courses></extensions>
+${trks}
+</gpx>`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([gpx], { type: 'application/gpx+xml' }));
+  a.download = `코스_백업_${kstDate(new Date())}.gpx`;
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toast(`코스 ${list.length}개를 백업 파일로 저장했어요 (다운로드 폴더)`);
+};
+// 백업 되살리기: 이미 있는 코스(같은 id)는 건너뛰고 없는 것만 추가
+function restoreBackup(json) {
+  let incoming;
+  try { incoming = JSON.parse(json); } catch { incoming = null; }
+  if (!Array.isArray(incoming)) { toast('백업 파일을 읽지 못했어요'); return; }
+  const list = loadSaved(), have = new Set(list.map(c => c.id));
+  const add = incoming.filter(c => c && c.id && Array.isArray(c.segments) && Array.isArray(c.waypoints) && !have.has(c.id));
+  const merged = [...list, ...add].sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''));
+  if (!store.set('courses', JSON.stringify(merged))) { toast('저장 공간이 부족해서 되살리지 못했어요'); return; }
+  $('sSearch').value = '';
+  openTab('saved'); refreshSaved();
+  toast(add.length ? `백업에서 코스 ${add.length}개를 되살렸어요${incoming.length > add.length ? ` (이미 있는 ${incoming.length - add.length}개는 그대로)` : ''}` : '백업의 코스가 모두 이미 저장돼 있어요');
 }
 
 // ---------- 코스 찾기 (산림청 100대명산 GPX) ----------
