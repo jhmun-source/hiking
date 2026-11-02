@@ -563,7 +563,7 @@ function refreshList() {
     li.innerHTML = `<span class="n"></span><span class="name"></span><span class="mode"></span><button>삭제</button>`;
     li.querySelector('.n').textContent = label;
     li.querySelector('.name').textContent = wp.name || `${wp.lat.toFixed(5)}, ${wp.lng.toFixed(5)}`;
-    li.querySelector('.mode').textContent = seg ? ({ auto: '등산로', line: '직선', fixed: 'GPX' }[seg.mode]) + (seg.error ? ' ⚠' : '') : '';
+    li.querySelector('.mode').textContent = seg ? ({ auto: '등산로', run: '러닝', line: '직선', fixed: 'GPX' }[seg.mode]) + (seg.error ? ' ⚠' : '') : '';
     li.querySelector('.name').onclick = () => map.panTo([wp.lat, wp.lng]);
     li.querySelector('button').onclick = () => removeWaypoint(i);
     ul.appendChild(li);
@@ -583,15 +583,17 @@ function limited(fn) {
 }
 const routeCache = new Map();
 // pts: [[lat,lng], ...] (2개 이상) → 그 점들을 차례로 지나는 등산로 경로 [[lat,lng,ele], ...]
-async function brouter(pts) {
+// 러닝은 'shortest' (걸어갈 수 있는 길 중 가장 짧은 길: 차도 옆 보도·다리도 그대로 지나감, 고속도로만 제외)
+async function brouter(pts, profile = 'hiking-mountain') {
   const lonlats = pts.map(p => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join('|');
-  if (routeCache.has(lonlats)) return routeCache.get(lonlats).map(c => c.slice());
-  const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=hiking-mountain&alternativeidx=0&format=geojson`;
+  const key = profile + ':' + lonlats;
+  if (routeCache.has(key)) return routeCache.get(key).map(c => c.slice());
+  const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=${profile}&alternativeidx=0&format=geojson`;
   for (let attempt = 0; ; attempt++) {
     const { status, txt } = await limited(async () => { const r = await fetch(url); return { status: r.status, txt: await r.text() }; });
     if (status === 200 && txt.trim()[0] === '{') {
       const coords = JSON.parse(txt).features[0].geometry.coordinates.map(c => [c[1], c[0], c[2] ?? null]);
-      routeCache.set(lonlats, coords);
+      routeCache.set(key, coords);
       return coords.map(c => c.slice());
     }
     if (![403, 429, 503].includes(status) || attempt >= 3) throw new Error(txt.slice(0, 120));
@@ -618,12 +620,12 @@ async function computeSegment(si) {
   seg.coords = [[a.lat, a.lng, null], [b.lat, b.lng, null]];
   render(); setStatus('경로 탐색 중…');
   try {
-    const coords = await brouter([[a.lat, a.lng], [b.lat, b.lng]]);
+    const coords = await brouter([[a.lat, a.lng], [b.lat, b.lng]], seg.mode === 'run' ? 'shortest' : 'hiking-mountain');
     if (seg.token !== token) return;
     seg.coords = coords;
     const gapA = haversine(a.lat, a.lng, seg.coords[0][0], seg.coords[0][1]);
     const gapB = haversine(b.lat, b.lng, seg.coords.at(-1)[0], seg.coords.at(-1)[1]);
-    if (gapA > 150 || gapB > 150) seg.error = '찍은 지점 근처에 등산로가 없어요';
+    if (gapA > 150 || gapB > 150) seg.error = seg.mode === 'run' ? '찍은 지점 근처에 길이 없어요' : '찍은 지점 근처에 등산로가 없어요';
     setStatus(seg.error || '', !!seg.error);
   } catch (e) {
     if (seg.token !== token) return;
@@ -1002,11 +1004,22 @@ $('editBtn').onclick = () => {
   editing = !editing; $('editBtn').classList.toggle('on', editing);
   toast(editing ? '지도를 누르면 지점이 추가돼요' : '지점 추가 꺼짐 (지도만 보기)');
 };
+// 연결 방식: 등산로 → 러닝(도로·다리) → 직선 → 등산로 … (러닝하는 사람이 매번 바꾸지 않게 기억)
+const MODES = {
+  auto: ['등산로', '다음 구간은 등산로를 따라 이어져요'],
+  run: ['러닝', '다음 구간은 러닝 길(보도·다리·공원길)로 이어져요'],
+  line: ['직선', '다음 구간은 직선으로 이어져요'],
+};
+function setMode(m) {
+  mode = MODES[m] ? m : 'auto';
+  $('modeLbl').textContent = MODES[mode][0];
+  $('modeBtn').classList.toggle('on', mode !== 'auto');
+  store.set('segMode', mode);
+}
+setMode(store.get('segMode'));
 $('modeBtn').onclick = () => {
-  mode = mode === 'auto' ? 'line' : 'auto';
-  $('modeLbl').textContent = mode === 'auto' ? '등산로' : '직선';
-  $('modeBtn').classList.toggle('on', mode === 'line');
-  toast(mode === 'auto' ? '다음 구간은 등산로를 따라 이어져요' : '다음 구간은 직선으로 이어져요');
+  setMode({ auto: 'run', run: 'line', line: 'auto' }[mode]);
+  toast(MODES[mode][1]);
 };
 // 되돌리기: 도착지가 정해져 있으면 도착지는 두고 그 앞에 마지막으로 찍은 지점부터
 $('undoBtn').onclick = () => removeWaypoint(destLocked && waypoints.length > 1 ? waypoints.length - 2 : waypoints.length - 1);
