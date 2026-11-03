@@ -104,9 +104,9 @@
   /* 내 위치: 파란 점 + 폰이 향한 쪽을 가리키는 부채꼴 */
   .me { position: relative; width: 0; height: 0; }
   .me .dot { position: absolute; left: -9px; top: -9px; width: 18px; height: 18px; box-sizing: border-box; border-radius: 50%; background: var(--me); border: 3px solid #fff; box-shadow: 0 0 4px rgba(0,0,0,.4); }
-  .me .beam { position: absolute; left: -36px; top: -36px; width: 72px; height: 72px; border-radius: 50%; transition: transform .25s linear;
-    background: conic-gradient(from -30deg, color-mix(in srgb, var(--me) 50%, transparent) 0deg 60deg, transparent 60deg);
-    -webkit-mask: radial-gradient(circle, #000 35%, transparent 72%); mask: radial-gradient(circle, #000 35%, transparent 72%); }
+  .me .beam { position: absolute; left: -52px; top: -52px; width: 104px; height: 104px; border-radius: 50%; transition: transform .25s linear;
+    background: conic-gradient(from -28deg, color-mix(in srgb, var(--me) 90%, transparent) 0deg 56deg, transparent 56deg);
+    -webkit-mask: radial-gradient(circle closest-side, #000 70%, transparent 100%); mask: radial-gradient(circle closest-side, #000 70%, transparent 100%); }
   .me .beam[hidden] { display: none; }
   /* 인증키 칸: password로 두면 크롬 비밀번호 저장이 앞쪽 검색칸을 아이디 칸으로 보고 키를 채워 넣어서 글자만 가림 */
   .secret { -webkit-text-security: disc; } /* .row 같은 display 지정이 hidden을 덮어쓰지 않게 */
@@ -438,7 +438,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-03h · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-03i · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
