@@ -431,7 +431,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-03f · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-03g · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -1243,9 +1243,12 @@ ${trk}
 </gpx>`;
 }
 // 러닝 모드로 이은 거리가 등산로로 이은 거리보다 길면 러닝 코스 (가져온 GPX·직선은 셈에서 뺌)
+// 둘 다 없으면(워치 기록만 불러온 코스 등) 지금 고른 모드 버튼을 따름
 function courseKind(segs = segments) {
   const len = (m) => segs.filter(s => s.mode === m).reduce((t, s) => t + s.coords.reduce((d, c, i) => i ? d + haversine(s.coords[i - 1][0], s.coords[i - 1][1], c[0], c[1]) : 0, 0), 0);
-  return len('run') > len('auto') ? '러닝' : '등산';
+  const run = len('run'), hike = len('auto');
+  if (!run && !hike) return segs === segments && mode === 'run' ? '러닝' : '등산';
+  return run > hike ? '러닝' : '등산';
 }
 // 다운로드 폴더에서 한데 모이고 찾기 쉽게: 코스_이름_등산.gpx / 코스_이름_러닝.gpx
 function gpxFileName() { return `코스_${routeName().replace(/[\\/:*?"<>|]/g, '_')}_${courseKind()}.gpx`; }
