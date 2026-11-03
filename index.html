@@ -101,6 +101,13 @@
   button.btn:disabled { opacity: .45; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   [hidden] { display: none !important; }
+  /* 내 위치: 파란 점 + 폰이 향한 쪽을 가리키는 부채꼴 */
+  .me { position: relative; width: 0; height: 0; }
+  .me .dot { position: absolute; left: -9px; top: -9px; width: 18px; height: 18px; box-sizing: border-box; border-radius: 50%; background: var(--me); border: 3px solid #fff; box-shadow: 0 0 4px rgba(0,0,0,.4); }
+  .me .beam { position: absolute; left: -36px; top: -36px; width: 72px; height: 72px; border-radius: 50%; transition: transform .25s linear;
+    background: conic-gradient(from -30deg, color-mix(in srgb, var(--me) 50%, transparent) 0deg 60deg, transparent 60deg);
+    -webkit-mask: radial-gradient(circle, #000 35%, transparent 72%); mask: radial-gradient(circle, #000 35%, transparent 72%); }
+  .me .beam[hidden] { display: none; }
   /* 인증키 칸: password로 두면 크롬 비밀번호 저장이 앞쪽 검색칸을 아이디 칸으로 보고 키를 채워 넣어서 글자만 가림 */
   .secret { -webkit-text-security: disc; } /* .row 같은 display 지정이 hidden을 덮어쓰지 않게 */
   .row > * { flex: 1; }
@@ -431,7 +438,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-03g · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-03h · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -1142,6 +1149,7 @@ function useMeAsStart(ll) {
 function stopLocating() {
   if (watchId != null) navigator.geolocation.clearWatch(watchId);
   watchId = null; follow = false; startFromMe = false;
+  stopHeading();
   if (meDot) { map.removeLayer(meDot); map.removeLayer(meAcc); meDot = meAcc = null; }
   meLL = null; updateNav();
   $('locBtn').classList.remove('on');
@@ -1158,20 +1166,60 @@ $('locBtn').onclick = () => {
   if (meDot) { map.setView(meDot.getLatLng(), Math.max(map.getZoom(), 15)); useMeAsStart(meDot.getLatLng()); }
   if (watchId != null) return;
   $('locBtn').classList.add('on');
-  watchId = navigator.geolocation.watchPosition((pos) => {
+  startHeading();
+  let gotGps = false;
+  const show = (pos) => {
     const ll = [pos.coords.latitude, pos.coords.longitude];
     if (!meDot) {
       meAcc = L.circle(ll, { radius: pos.coords.accuracy, color: css('--me'), weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map);
-      meDot = L.circleMarker(ll, { radius: 8, color: '#fff', weight: 3, fillColor: css('--me'), fillOpacity: 1, interactive: false }).addTo(map);
+      meDot = L.marker(ll, { icon: L.divIcon({ className: '', html: '<div class="me"><div class="beam" hidden></div><div class="dot"></div></div>', iconSize: [0, 0] }), interactive: false, keyboard: false, zIndexOffset: 1000 }).addTo(map);
+      drawHeading();
     } else { meDot.setLatLng(ll); meAcc.setLatLng(ll).setRadius(pos.coords.accuracy); }
     if (follow) { map.setView(ll, Math.max(map.getZoom(), 15)); follow = false; }
     useMeAsStart(L.latLng(ll));
     meLL = L.latLng(ll); updateNav();
+  };
+  // GPS가 처음 잡히기까지 실내·건물 사이에선 10~30초 걸려서: 와이파이·기지국으로 대략의 위치(또는 최근 위치)를 먼저 보여 주고 GPS로 다듬음
+  navigator.geolocation.getCurrentPosition((pos) => { if (!gotGps && watchId != null) show(pos); }, () => {}, { enableHighAccuracy: false, maximumAge: 120000, timeout: 5000 });
+  watchId = navigator.geolocation.watchPosition((pos) => {
+    gotGps = true; show(pos);
+    // 걷는 중이면 GPS 진행 방향도 씀 (나침반이 없는 기기)
+    if (!compassOn && pos.coords.heading != null && !isNaN(pos.coords.heading) && pos.coords.speed > 0.8) setHeading(pos.coords.heading);
   }, (err) => {
-    toast(err.code === 1 ? '위치 권한이 꺼져 있어요. 브라우저 설정에서 허용해 주세요.' : '위치를 가져오지 못했어요');
-    $('locBtn').classList.remove('on'); watchId = null;
-  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+    if (err.code === 1) { toast('위치 권한이 꺼져 있어요. 브라우저 설정에서 허용해 주세요.'); stopLocating(); return; }
+    // 시간 초과는 계속 기다림 (대략의 위치는 이미 보이고 있을 수 있음)
+    if (!meDot) toast('GPS 신호를 기다리는 중이에요. 하늘이 보이는 곳이면 더 빨라요.');
+  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
 };
+// 방향: 폰 나침반(안드로이드 deviceorientationabsolute, 아이폰 webkitCompassHeading)
+let compassOn = false, headingDeg = null, headingShown = null;
+function onOrient(e) {
+  let h = e.webkitCompassHeading;
+  if (h == null) { if (e.alpha == null || (e.type === 'deviceorientation' && !e.absolute)) return; h = 360 - e.alpha; }
+  compassOn = true;
+  setHeading(h + (screen.orientation?.angle || 0));
+}
+function setHeading(h) { headingDeg = ((h % 360) + 360) % 360; drawHeading(); }
+function drawHeading() {
+  const beam = meDot?.getElement()?.querySelector('.beam');
+  if (!beam || headingDeg == null) return;
+  // 359°→1°에서 거꾸로 한 바퀴 돌지 않게 가까운 쪽으로 이어 붙임
+  headingShown = headingShown == null ? headingDeg : headingShown + ((headingDeg - headingShown + 540) % 360 - 180);
+  beam.style.transform = `rotate(${headingShown}deg)`;
+  beam.hidden = false;
+}
+function startHeading() {
+  if ('ondeviceorientationabsolute' in window) addEventListener('deviceorientationabsolute', onOrient);
+  else addEventListener('deviceorientation', onOrient);
+  // 아이폰은 버튼을 누른 순간에 권한을 물어야 이벤트가 옴 (허락 전엔 위 리스너가 그냥 조용히 있음)
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    DeviceOrientationEvent.requestPermission().catch(() => {});
+  }
+}
+function stopHeading() {
+  removeEventListener('deviceorientationabsolute', onOrient); removeEventListener('deviceorientation', onOrient);
+  compassOn = false; headingDeg = headingShown = null;
+}
 
 // 배경 지도, 레이어
 document.querySelectorAll('input[name=base]').forEach(r => r.onchange = () => {
