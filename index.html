@@ -150,6 +150,11 @@
   .acc-list button span:last-child { color: var(--muted); flex: none; }
   .plan-out b { font-variant-numeric: tabular-nums; }
   .plan-out .warn { color: var(--danger); font-weight: 600; }
+  .eta { margin-top: 6px; } .eta summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+  .eta table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .eta td { padding: 3px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  .eta td:last-child { text-align: right; white-space: nowrap; color: var(--muted, #888); }
+  .eta tr.warn td { color: var(--danger); }
   .plan-out .sub { color: var(--muted); font-size: 12px; }
   .slope-key { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
   .slope-key i { display: inline-block; width: 10px; height: 4px; border-radius: 2px; margin: 0 2px 2px 4px; vertical-align: middle; }
@@ -2101,6 +2106,38 @@ function planSummit() {
   if (hasEle) { const k = pts.findIndex(p => p[2] === stats.max); if (k > 0) i = k; }
   return { i, p: pts[i], h: stats.cumH[i], label: hasEle ? '정상' : '도착지' };
 }
+// 계획 탭 "지점별 예상 시각"에 넣을 곳들 (경로 순서, 경로 점 번호 i)
+function planMarks(top) {
+  const { pts, stats } = current, out = [];
+  const add = (i, label, kind) => { if (i >= 0 && i < pts.length) out.push({ i, label, kind }); };
+  add(0, waypoints[0]?.name || '출발', 'wp');
+  // 경유지·도착: 구간이 끝나는 점
+  let idx = 0;
+  segments.forEach((sg, j) => {
+    idx += sg.coords.length - (j > 0 ? 1 : 0);
+    const w = waypoints[j + 1], last = j === segments.length - 1;
+    add(idx - 1, w?.name || (last ? '도착' : `지점 ${j + 1}`), 'wp');
+  });
+  if (top.label === '정상') add(top.i, `정상 ${Math.round(top.p[2])} m`, 'top');
+  // 이름 있는 갈림길·봉우리 (경로에서 60 m 안쪽)
+  for (const poi of routePois || []) {
+    if (!['SIGN', 'PEAK', 'SHELTER'].includes(poi.c) || !(poi.n || poi.s?.length)) continue;
+    let bi = -1, bd = 60;
+    for (let i = 0; i < pts.length; i += 2) { const d = haversine(poi.p[0], poi.p[1], pts[i][0], pts[i][1]); if (d < bd) { bd = d; bi = i; } }
+    add(bi, poiLabel(poi), 'poi');
+  }
+  // 거리 표시: 15 km 이하는 1 km, 그 넘으면 5 km마다
+  const step = stats.dist > 15000 ? 5000 : 1000;
+  for (let k = step, i = 0; k < stats.dist - step / 3; k += step) { while (i < pts.length - 1 && stats.cum[i] < k) i++; add(i, `${k / 1000} km 지점`, 'km'); }
+  // 경유지·정상은 항상, 갈림길·봉우리는 앞서 고른 곳과 400 m 넘게 떨어질 때만, km 표시는 150 m
+  const kept = [], far = (m, gap) => kept.every(o => Math.abs(stats.cum[o.i] - stats.cum[m.i]) >= gap);
+  for (const kind of ['wp', 'top', 'poi', 'km']) {
+    for (const m of out.filter(x => x.kind === kind).sort((x, y) => x.i - y.i)) {
+      if (kind === 'wp' || (kind === 'top' ? far(m, 50) : far(m, kind === 'poi' ? 400 : 150))) kept.push(m);
+    }
+  }
+  return kept.sort((x, y) => x.i - y.i);
+}
 let lastPlan = null;
 function updatePlan() {
   const { stats } = current;
@@ -2144,6 +2181,16 @@ function updatePlan() {
     if (civil && start < civil.rise) out.push('<div class="warn">출발할 때 아직 어두워요. 헤드랜턴을 꼭 챙기세요.</div>');
     if (end > sun.set) out.push(`<div class="warn">해 지기 전에 끝나지 않아요 (일몰 ${kst(sun.set)}). 일찍 출발하거나 짧은 코스를 고르세요.</div>`);
     else if (+sun.set - end < 3600e3) out.push('<div class="warn">일몰 1시간 안쪽에 끝나요. 쉬는 시간을 생각하면 여유가 적어요.</div>');
+  }
+  // 지점별 예상 시각: 경유지·정상·이름 있는 갈림길/봉우리, 그리고 1 km(긴 코스는 5 km)마다
+  const marks = planMarks(top);
+  if (marks.length > 2) {
+    const rows = marks.map(m => {
+      const at = new Date(+start + stats.cumH[m.i] * H);
+      const late = sun && at > sun.set;
+      return `<tr${late ? ' class="warn"' : ''}><td><b>${day(at)}${kst(at)}</b></td><td>${esc(m.label)}${late ? ' · 일몰 뒤' : ''}</td><td>${(stats.cum[m.i] / 1000).toFixed(1)} km</td></tr>`;
+    }).join('');
+    out.push(`<details class="eta"${marks.length <= 12 ? ' open' : ''}><summary>지점별 예상 시각 (${marks.length}곳)</summary><table>${rows}</table></details>`);
   }
   $('planOut').innerHTML = out.join('');
   lastPlan = { date, lat: top.p[0], lng: top.p[1], ele, label: top.label, start, atTop, end };
