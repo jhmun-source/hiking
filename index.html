@@ -269,10 +269,17 @@
           <button class="btn" id="mDone" style="flex:0 0 auto">완등 표시</button>
         </div>
         <h2 id="mTitle"></h2>
-        <p class="hint" style="margin-top:0">코스를 누르면 지도에 미리 보여요. 지도 위 선을 눌러도 돼요. 마음에 들면 "이 코스로"를 누르세요.</p>
+        <p class="hint" style="margin-top:0" id="cHint">코스를 누르면 지도에 미리 보여요. 지도 위 선을 눌러도 돼요. 마음에 들면 "이 코스로"를 누르세요.</p>
         <ul class="list" id="cList"></ul>
+        <div id="fBox" hidden>
+          <h2>산림청 등산로 <span id="fSum" style="font-weight:400"></span></h2>
+          <div class="row" style="margin-top:0">
+            <button class="btn" id="fToggle">등산로 지도에 보기</button>
+          </div>
+          <p class="hint" id="fHint">구간 색은 산림청 난이도예요: <span style="color:#3a9d4a">■</span> 하 <span style="color:#e0a000">■</span> 중 <span style="color:#d1495b">■</span> 상. 점은 정상·이정표·화장실·약수터 같은 표지예요. 오른쪽 + 버튼으로 지점 추가를 끄고 선이나 점을 누르면 거리·걸리는 시간·이름이 나와요.</p>
+        </div>
       </div>
-      <p class="hint">출처: 한국등산·트레킹지원센터 산림청 100대명산 GPX (2022년 1월, 공공데이터포털). 현재 등산로 상황과 다를 수 있어요.</p>
+      <p class="hint">출처: 한국등산·트레킹지원센터 산림청 100대명산 GPX (2022년 1월), 산림청 등산로 정보 (공공데이터포털). 현재 등산로 상황과 다를 수 있어요.</p>
     </div>
 
     <div class="pane" data-pane="trek">
@@ -424,20 +431,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <h2>공공데이터포털 인증키 (두루누비 코리아둘레길 · 산림청 등산로 공용)</h2>
-      <div class="row" style="margin-top:0">
-        <input type="text" id="fsKey" class="secret" autocomplete="off" spellcheck="false" placeholder="공공데이터포털 일반 인증키 (Decoding)" style="flex:3">
-        <button class="btn" id="fsSave">저장</button>
-      </div>
-      <div class="row">
-        <input type="text" id="fsMountain" value="금정산" placeholder="산 이름" style="flex:2">
-        <button class="btn" id="fsTest">응답 확인</button>
-      </div>
-      <div id="fsResult" class="hint"></div>
-      <pre id="fsRaw" hidden style="white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:200px;overflow:auto;background:var(--bg);padding:8px;border-radius:8px;margin:8px 0 0"></pre>
-      <div class="row"><button class="btn" id="fsCopy" hidden>결과 복사 (Claude에게 보내기용)</button></div>
-      <p class="hint">키는 이 기기에만 저장돼요. 결과 복사에는 키가 들어가지 않아요.</p>
-      <p class="hint">앱 버전 2026-11-03c · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-03d · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -2237,11 +2231,26 @@ function poisNear(pts, pois) {
 
 let mIndex = null, mData = null, mSel = -1;
 const mLayer = L.layerGroup().addTo(map);
-async function loadIndex() {
-  if (mIndex) return mIndex;
-  try { mIndex = await (await fetch('courses/index.json')).json(); }
-  catch { toast('코스 목록을 불러오지 못했어요. 인터넷 연결을 확인하세요.'); return null; }
-  return mIndex;
+let mIndexLoading = null; // 여러 곳에서 동시에 불러도 한 번만 받음
+function loadIndex() {
+  if (mIndex) return Promise.resolve(mIndex);
+  return mIndexLoading ||= (async () => {
+    let idx;
+    try { idx = await (await fetch('courses/index.json')).json(); }
+    catch { toast('코스 목록을 불러오지 못했어요. 인터넷 연결을 확인하세요.'); mIndexLoading = null; return null; }
+    // 산림청 등산로(forest/)를 붙임: 이름이 같고 범위가 겹치면 같은 산, 나머지는 산림청에만 있는 산으로 목록에 추가
+    idx.extra = [];
+    try {
+      const f = (await (await fetch('forest/index.json')).json()).mountains;
+      const overlap = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+      for (const fm of f) {
+        const m = idx.mountains.find(m => m.m === fm.m && !m.forest && overlap(m.b, fm.b));
+        if (m) m.forest = fm.code;
+        else idx.extra.push({ m: fm.m, b: fm.b, courses: [], forest: fm.code, km: fm.km });
+      }
+    } catch {} // 산림청 목록이 없어도 100대 명산은 그대로
+    return mIndex = idx;
+  })();
 }
 function fitPadded(bounds) {
   // 패널에 가리지 않게 여백
@@ -2287,7 +2296,7 @@ async function renderMountains(mode) {
   const idx = await loadIndex(); if (!idx) return;
   const q = $('mSearch').value.trim();
   const c = map.getCenter();
-  let list = idx.mountains.map(m => ({ ...m, d: distToBox(c, m.b), n: m.courses.filter(courseOk).length }));
+  let list = [...idx.mountains, ...idx.extra].map(m => ({ ...m, d: distToBox(c, m.b), n: m.courses.filter(courseOk).length }));
   if (q) list = list.filter(m => m.m.includes(q));
   const filtered = cFilter.dist !== 'all' || cFilter.loop;
   if (filtered) list = list.filter(m => m.n > 0);
@@ -2298,38 +2307,50 @@ async function renderMountains(mode) {
   const ul = $('mList'); ul.innerHTML = '';
   if (!list.length) {
     ul.innerHTML = filtered ? '<li class="empty">조건에 맞는 코스가 없어요. 거리나 원점회귀 조건을 바꿔 보세요.</li>'
-      : '<li class="empty">100대 명산에 없는 산이에요. 다른 이름으로 검색하거나 직접 그려 주세요.</li>';
+      : '<li class="empty">목록에 없는 산이에요. 다른 이름으로 검색하거나 직접 그려 주세요.</li>';
     return;
   }
   list.slice(0, q ? 30 : 12).forEach(m => {
     const li = document.createElement('li');
     li.innerHTML = '<span class="name"><span></span><small></small></span><button>코스 보기</button>';
     li.querySelector('.name > span').textContent = m.m;
-    li.querySelector('small').textContent = `${filtered ? `조건에 맞는 코스 ${m.n}개` : `코스 ${m.courses.length}개`} · ${m.d < 1000 ? '지도 안' : `지도에서 ${Math.round(m.d / 1000)} km`}`;
+    const what = !m.courses.length ? `산림청 등산로 ${m.km} km` : filtered ? `조건에 맞는 코스 ${m.n}개` : `코스 ${m.courses.length}개${m.forest ? ' · 등산로 지도' : ''}`;
+    li.querySelector('small').textContent = `${what} · ${m.d < 1000 ? '지도 안' : `지도에서 ${Math.round(m.d / 1000)} km`}`;
     if (done[m.m]) li.querySelector('small').insertAdjacentHTML('afterbegin', `<span class="done-tag">✓ 완등 ${esc(done[m.m])}</span> · `);
-    li.onclick = () => openMountain(m.m);
+    li.querySelector('button').textContent = m.courses.length ? '코스 보기' : '등산로 보기';
+    li.onclick = () => openMountain(m.m, m);
     ul.appendChild(li);
   });
 }
 $('mSearch').addEventListener('input', () => renderMountains());
 $('mNear').onclick = () => { $('mSearch').value = ''; renderMountains('near'); };
 
-async function openMountain(name) {
+// entry: 목록의 산 (산림청에만 있는 산은 courses가 비어 있음). 정상 표시에서 열면 이름으로 찾음
+async function openMountain(name, entry) {
+  entry ||= (await loadIndex())?.mountains.find(m => m.m === name);
   let data;
-  try { data = await (await fetch(`courses/${encodeURIComponent(name)}.json`)).json(); }
-  catch { toast('코스를 불러오지 못했어요. 인터넷 연결을 확인하세요.'); return; }
+  if (entry && !entry.courses.length) data = { mountain: name, courses: [], pois: [] };
+  else {
+    try { data = await (await fetch(`courses/${encodeURIComponent(name)}.json`)).json(); }
+    catch { toast('코스를 불러오지 못했어요. 인터넷 연결을 확인하세요.'); return; }
+  }
   mData = data; mSel = -1;
   $('mBrowse').hidden = true; $('mDetail').hidden = false;
   syncDoneBtn(); showSummits();
   drawMountain();
   renderCourses();
+  openForest(entry?.forest, !data.courses.length);
   const shown = data.courses.filter(courseOk);
-  fitPadded(L.latLngBounds((shown.length ? shown : data.courses).flatMap(c => [c.pts[0], c.pts.at(-1)]).map(p => [p[0], p[1]])).pad(0.2));
+  if (data.courses.length) fitPadded(L.latLngBounds((shown.length ? shown : data.courses).flatMap(c => [c.pts[0], c.pts.at(-1)]).map(p => [p[0], p[1]])).pad(0.2));
+  else if (entry) fitPadded(L.latLngBounds([entry.b.slice(0, 2), entry.b.slice(2)]));
 }
 function renderCourses() {
   const shown = mData.courses.map((c, i) => [c, i]).filter(([c]) => courseOk(c));
-  $('mTitle').textContent = `${mData.mountain} · 코스 ${shown.length === mData.courses.length ? `${shown.length}개` : `${shown.length}개 / 전체 ${mData.courses.length}개`}`;
+  $('mTitle').textContent = !mData.courses.length ? mData.mountain
+    : `${mData.mountain} · 코스 ${shown.length === mData.courses.length ? `${shown.length}개` : `${shown.length}개 / 전체 ${mData.courses.length}개`}`;
   const ul = $('cList'); ul.innerHTML = '';
+  $('cHint').hidden = !mData.courses.length;
+  if (!mData.courses.length) { ul.innerHTML = '<li class="empty">100대 명산이 아니라 추천 코스는 없어요. 아래 산림청 등산로를 보면서 지도에 직접 그려 보세요.</li>'; return; }
   if (!shown.length) { ul.innerHTML = '<li class="empty">이 산에는 조건에 맞는 코스가 없어요.</li>'; return; }
   shown.forEach(([c, i]) => {
     const s = trackStats(c.pts);
@@ -2385,10 +2406,71 @@ function useCourse(i) {
   toast('코스를 불러왔어요. 저장하거나 워치로 보낼 수 있어요. 갈림길·봉우리도 같이 들어가요.');
 }
 function closeMountain() {
-  mData = null; mSel = -1; mLayer.clearLayers(); showRoutePois();
+  mData = null; mSel = -1; mLayer.clearLayers(); showRoutePois(); closeForest();
   $('mBrowse').hidden = false; $('mDetail').hidden = true;
   showSummits();
 }
+// ---------- 산림청 등산로 (forest/<코드>.json: 구간 선·거리·오르/내림 시간·난이도, 정상·이정표 같은 표지) ----------
+// 산림청 등산로 API가 알려 주는 산별 zip(shp)을 미리 변환해 둠 (zip 서버가 브라우저에서 직접 받는 걸 막아서)
+// 난이도 코드는 산림청 자료 그대로 1·2·3 = 상·중·하
+const F_DIFF = { 1: ['상', '#d1495b'], 2: ['중', '#e0a000'], 3: ['하', '#3a9d4a'] };
+const F_MARK = { PEAK: ['정상', '#2f6b3f'], SIGN: ['이정표', '#1d3557'], DANGER: ['위험', '#d1495b'], TOILET: ['화장실', '#6b716c'],
+  WATER: ['약수터', '#1a73e8'], VIEW: ['조망점', '#7b2cbf'], REST: ['쉼터', '#8a5a00'], PARK: ['주차장', '#1a73e8'], HELI: ['헬기장', '#6b716c'] };
+const fLayer = L.layerGroup();
+let fCode = null, fData = null;
+function fPopup(ll, rows) {
+  const div = document.createElement('div'); div.className = 'poi-pop';
+  rows.forEach((t, i) => { const e = document.createElement(i ? 'span' : 'b'); e.textContent = t; if (i) e.style.display = 'block'; div.appendChild(e); });
+  L.popup().setLatLng(ll).setContent(div).openOn(map);
+}
+// 지점 추가가 켜져 있으면 선·점을 눌러도 그대로 지점이 찍히고(아래 지도로 넘김), 꺼져 있을 때만 정보를 보여 줌
+function fClick(rows) { return (e) => { if (editing || georef) return; L.DomEvent.stop(e); fPopup(e.latlng, rows); }; }
+function drawForest() {
+  fLayer.clearLayers();
+  if (!fData) return;
+  for (const s of fData.segs) {
+    const [g, color] = F_DIFF[s.g] || ['', '#5b6f8a'];
+    const rows = [`산림청 등산로 구간${g ? ` · 난이도 ${g}` : ''}`, `${s.d >= 1000 ? (s.d / 1000).toFixed(1) + ' km' : s.d + ' m'}`
+      + (s.u || s.w ? ` · 오를 때 약 ${s.u}분 · 내려올 때 약 ${s.w}분` : '')];
+    L.polyline(s.p, { color, weight: 4, opacity: 0.85 }).on('click', fClick(rows)).addTo(fLayer);
+  }
+  for (const m of fData.marks) {
+    const [label, color] = F_MARK[m.c] || ['표지', '#555'];
+    const rows = [m.n || label, ...(m.n ? [label] : []), ...(m.x ? [m.x] : [])];
+    L.circleMarker(m.p, { radius: m.c === 'PEAK' ? 6 : 4, color: '#fff', weight: 1.5, fillColor: color, fillOpacity: 1 })
+      .on('click', fClick(rows)).addTo(fLayer);
+  }
+}
+function syncForestBtn() {
+  const on = map.hasLayer(fLayer);
+  $('fToggle').textContent = on ? '등산로 지도에서 숨기기' : '등산로 지도에 보기';
+  $('fToggle').classList.toggle('primary', !on);
+}
+async function openForest(code, show) {
+  closeForest();
+  $('fBox').hidden = !code;
+  if (!code) return;
+  fCode = code;
+  $('fSum').textContent = '';
+  if (show) await showForest();
+  syncForestBtn();
+}
+async function showForest() {
+  if (!fData || fData.code !== fCode) {
+    try { fData = await (await fetch(`forest/${fCode}.json`)).json(); }
+    catch { toast('산림청 등산로를 불러오지 못했어요. 인터넷 연결을 확인하세요.'); return; }
+  }
+  const km = fData.segs.reduce((a, s) => a + s.d, 0) / 1000;
+  $('fSum').textContent = `(구간 ${fData.segs.length}개 · ${km.toFixed(1)} km)`;
+  drawForest(); fLayer.addTo(map); syncForestBtn();
+  if (!mData?.courses.length) fitPadded(L.latLngBounds(fData.segs.flatMap(s => s.p)));
+}
+function closeForest() { fCode = null; fLayer.clearLayers(); map.removeLayer(fLayer); }
+$('fToggle').onclick = () => {
+  if (map.hasLayer(fLayer)) { map.removeLayer(fLayer); syncForestBtn(); }
+  else showForest();
+};
+
 $('mBack').onclick = () => { closeMountain(); renderMountains(); };
 $('mClose').onclick = () => { closeMountain(); renderMountains(); };
 
@@ -2527,63 +2609,6 @@ $('tClose').onclick = () => { closeSeries(); refreshTrek(); };
 // 두루누비 코리아둘레길은 trails/에 미리 넣어 둠 (두루누비 GPX 서버가 브라우저에서 직접 읽는 걸 막아서)
 function drTrails() { return []; }
 store.set('durunubi', ''); // 예전 버전이 기기에 저장해 둔 실시간 목록 정리 (중복 방지)
-
-// ---------- 산림청 등산로 API 시험 ----------
-// 명세: apis.data.go.kr/1400000/trailInfoService/getforestspatialdataservice?serviceKey&pageNo&numOfRows&mntnNm
-//  → item { mntnnm 산명, mntninfourl 등산로 URL, mntnfile 등산로 파일, mntnimg 이미지 } (XML)
-// 실제 응답과 파일 형식을 확인한 뒤 코스 찾기에 붙일 예정
-$('fsKey').value = store.get('fsKey') || '';
-$('fsSave').onclick = () => {
-  store.set('fsKey', $('fsKey').value.trim()); toast('공공데이터포털 키를 저장했어요');
-};
-let fsReport = '';
-$('fsTest').onclick = async () => {
-  const key = $('fsKey').value.trim(), name = $('fsMountain').value.trim();
-  if (!key) { toast('인증키를 먼저 넣어 주세요'); return; }
-  store.set('fsKey', key);
-  const out = $('fsResult'), raw = $('fsRaw');
-  out.textContent = '확인 중…'; raw.hidden = true; $('fsCopy').hidden = true;
-  const lines = [`[산림청 등산로 API 시험] 산: ${name}`];
-  try {
-    const url = `https://apis.data.go.kr/1400000/trailInfoService/getforestspatialdataservice?serviceKey=${encodeURIComponent(key)}&pageNo=1&numOfRows=10&mntnNm=${encodeURIComponent(name)}`;
-    const res = await fetch(url);
-    const txt = await res.text();
-    lines.push(`HTTP ${res.status} · ${res.headers.get('content-type')}`);
-    lines.push('--- 응답 (앞부분) ---', txt.slice(0, 2500));
-    const doc = new DOMParser().parseFromString(txt, 'application/xml');
-    const items = [...doc.getElementsByTagName('item')].map(it => Object.fromEntries([...it.children].map(c => [c.tagName, c.textContent.trim()])));
-    const code = doc.querySelector('resultCode')?.textContent, msg = doc.querySelector('resultMsg')?.textContent;
-    const authErr = doc.querySelector('returnAuthMsg')?.textContent || doc.querySelector('errMsg')?.textContent;
-    out.textContent = code ? `결과 ${code} ${msg || ''} · 항목 ${items.length}개`
-      : authErr?.includes('NOT_REGISTERED') ? '키가 아직 등록되지 않았어요. 승인 직후엔 1~2시간 뒤부터 동작하는 경우가 많아요. Decoding 키인지도 확인해 주세요.'
-      // 공공데이터포털: 키 없음 401, 이 API를 쓸 권한이 없는 키 403 (키가 틀렸거나 이 API 활용신청이 아직 승인 전)
-      : res.status === 403 ? '이 키로는 산림청 등산로 API를 쓸 수 없다고 나와요 (403). 공공데이터포털 마이페이지 → 활용신청 현황에서 이 API가 "승인"인지 확인해 주세요. 승인 직후면 1~2시간 뒤에 다시 눌러 보세요.'
-      : res.status === 401 ? '인증키가 전달되지 않았어요 (401). 키를 다시 붙여 넣어 주세요.'
-      : `오류: ${authErr || res.status}`;
-    // 등산로 파일을 앱에서 직접 받을 수 있는지(CORS)와 형식 확인
-    for (const it of items.slice(0, 3)) {
-      const f = it.mntnfile;
-      if (!f) continue;
-      try {
-        const r = await fetch(f);
-        const buf = new Uint8Array(await r.arrayBuffer());
-        const head = String.fromCharCode(...buf.slice(0, 4));
-        lines.push(`파일 직접 받기 OK: ${f} · ${r.headers.get('content-type')} · ${buf.length} bytes · 시작 "${head.replace(/[^\x20-\x7e]/g, '.')}"${head.startsWith('PK') ? ' (zip)' : ''}`);
-      } catch (e) {
-        lines.push(`파일 직접 받기 실패(브라우저 차단 가능성): ${f} · ${e.message}`);
-      }
-    }
-  } catch (e) {
-    out.textContent = '요청 실패: ' + e.message;
-    lines.push('요청 실패: ' + e.message);
-  }
-  fsReport = lines.join('\n').split(key).join('(키)');
-  raw.textContent = fsReport; raw.hidden = false; $('fsCopy').hidden = false;
-};
-$('fsCopy').onclick = async () => {
-  try { await navigator.clipboard.writeText(fsReport); toast('복사했어요. 대화창에 붙여 넣어 주세요.'); }
-  catch { toast('복사가 안 돼요. 결과 칸을 길게 눌러 직접 복사해 주세요.'); }
-};
 
 // ---------- 다른 앱에서 GPX 받기 (공유 메뉴 / 파일 열기) ----------
 // 공유: manifest share_target → sw.js가 파일을 'shared' 캐시에 넣고 ./?shared=1 로 열어 줌

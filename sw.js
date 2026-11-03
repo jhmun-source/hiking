@@ -1,5 +1,5 @@
 // 앱 화면은 오프라인에서도 열리게, 지도 타일은 본 것만 캐시 (대량 다운로드 안 함)
-const SHELL_CACHE = 'shell-v5';
+const SHELL_CACHE = 'shell-v6';
 const TILE_CACHE = 'tiles-v1';
 const SAVED_TILES = 'tiles-saved'; // 계획 탭 "이 코스 지도 저장"으로 받은 지도 (자동으로 지우지 않음)
 const TILE_LIMIT = 3000;
@@ -7,6 +7,7 @@ const SHELL = [
   './', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   './courses/index.json', // 산별 코스 파일은 한 번 열어 본 것만 저장돼서 산에서도 다시 열 수 있음
   './trails/index.json',  // 트레킹 목록 (구간 파일도 열어 본 것만 저장)
+  './forest/index.json',  // 산림청 등산로 목록 (산별 파일은 열어 본 것만 저장)
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js',
 ];
