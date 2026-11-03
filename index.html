@@ -54,6 +54,9 @@
   .fab.on { background: var(--accent); color: #fff; }
   .fab small { font: 600 10px system-ui; display: block; margin-top: -2px; }
   .fab.text { flex-direction: column; font-size: 10px; }
+  .fab.modes { height: auto; display: flex; flex-direction: column; gap: 2px; padding: 3px; cursor: default; }
+  .modes button { width: 40px; border: 0; border-radius: 9px; padding: 4px 0 3px; background: transparent; color: var(--text); font-size: 17px; line-height: 1.15; cursor: pointer; }
+  .modes button.on { background: var(--accent); color: #fff; }
 
   /* 하단 시트 */
   .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1001; background: var(--panel); border-radius: 16px 16px 0 0; box-shadow: var(--shadow);
@@ -204,7 +207,12 @@
   <button class="fab on" id="editBtn" title="지점 추가 켜기/끄기">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
   </button>
-  <button class="fab text" id="modeBtn" title="연결 방식"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20c4-2 3-8 8-8s4-6 8-8"/></svg><small id="modeLbl">등산로</small></button>
+  <!-- 길 잇는 방식: 세 가지를 늘 다 보여 줘서 처음 쓰는 사람도 바로 고를 수 있게 -->
+  <div class="fab modes" id="modeBtn" title="길 잇는 방식">
+    <button data-mode="auto">⛰️<small>등산</small></button>
+    <button data-mode="run">🏃<small>러닝</small></button>
+    <button data-mode="line">📏<small>직선</small></button>
+  </div>
   <button class="fab" id="undoBtn" title="마지막 지점 취소">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
   </button>
@@ -319,7 +327,7 @@
         <button class="btn" data-mode="run">🏃 러닝</button>
         <button class="btn" data-mode="line">📏 직선</button>
       </div>
-      <p class="hint" style="margin-top:4px">러닝: 보도·다리·공원길로 가장 짧게 이어요. 지도 오른쪽 버튼으로도 바꿀 수 있어요.</p>
+      <p class="hint" style="margin-top:4px">러닝: 보도·다리·공원길로 가장 짧게 이어요. 지도 오른쪽 ⛰️ 🏃 📏 버튼으로도 바꿀 수 있어요.</p>
       <h2>지점 <span style="font-weight:400">(지도 마커를 끌어서 옮길 수 있어요)</span></h2>
       <ul class="list" id="wplist"></ul>
       <div class="row">
@@ -429,7 +437,7 @@
       <pre id="fsRaw" hidden style="white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:200px;overflow:auto;background:var(--bg);padding:8px;border-radius:8px;margin:8px 0 0"></pre>
       <div class="row"><button class="btn" id="fsCopy" hidden>결과 복사 (Claude에게 보내기용)</button></div>
       <p class="hint">키는 이 기기에만 저장돼요. 결과 복사에는 키가 들어가지 않아요.</p>
-      <p class="hint">앱 버전 2026-11-03b · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-03c · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -1030,17 +1038,17 @@ const MODES = {
 };
 function setMode(m) {
   mode = MODES[m] ? m : 'auto';
-  $('modeLbl').textContent = MODES[mode][0];
-  $('modeBtn').classList.toggle('on', mode !== 'auto');
+  document.querySelectorAll('#modeBtn [data-mode]').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
   document.querySelectorAll('#modePick [data-mode]').forEach(b => b.classList.toggle('primary', b.dataset.mode === mode));
   store.set('segMode', mode);
 }
 setMode(store.get('segMode'));
-document.querySelectorAll('#modePick [data-mode]').forEach(b => b.onclick = () => { setMode(b.dataset.mode); toast(MODES[mode][1]); });
-$('modeBtn').onclick = () => {
-  setMode({ auto: 'run', run: 'line', line: 'auto' }[mode]);
-  toast(MODES[mode][1]);
-};
+document.querySelectorAll('#modePick [data-mode], #modeBtn [data-mode]').forEach(b => b.onclick = () => { setMode(b.dataset.mode); toast(MODES[mode][1]); });
+// 처음 한 번만: 오른쪽 버튼이 무엇인지 알려 줌
+if (!store.get('modeTip')) {
+  store.set('modeTip', '1');
+  setTimeout(() => toast('오른쪽 ⛰️ 🏃 📏 버튼으로 등산로·러닝·직선 중 길 잇는 방식을 고를 수 있어요'), 1500);
+}
 // 되돌리기: 도착지가 정해져 있으면 도착지는 두고 그 앞에 마지막으로 찍은 지점부터
 $('undoBtn').onclick = () => removeWaypoint(destLocked && waypoints.length > 1 ? waypoints.length - 2 : waypoints.length - 1);
 $('clear').onclick = () => { if (!waypoints.length || confirm('지금 지도에 그려진 코스를 지울까요?\n(저장 탭의 코스와 산·트레킹 목록은 그대로 남아요)')) clearRoute(); };
