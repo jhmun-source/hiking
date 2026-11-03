@@ -431,7 +431,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-03e · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-03f · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -693,7 +693,7 @@ async function computeSegment(si) {
   try {
     const coords = await brouter([[a.lat, a.lng], [b.lat, b.lng]], seg.mode === 'run' ? 'run' : 'hiking-mountain');
     if (seg.token !== token) return;
-    seg.coords = coords;
+    seg.coords = trimSpur(trimSpur(coords, b).reverse(), a).reverse();
     const gapA = haversine(a.lat, a.lng, seg.coords[0][0], seg.coords[0][1]);
     const gapB = haversine(b.lat, b.lng, seg.coords.at(-1)[0], seg.coords.at(-1)[1]);
     if (gapA > 150 || gapB > 150) seg.error = seg.mode === 'run' ? '찍은 지점 근처에 길이 없어요' : '찍은 지점 근처에 등산로가 없어요';
@@ -715,6 +715,28 @@ function haversine(la1, lo1, la2, lo2) {
   const dLa = (la2 - la1) * r, dLo = (lo2 - lo1) * r;
   const h = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLo / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+// 경로 끝이 찍은 점 p를 바로 옆(25 m 안)으로 지나쳤다가 다른 길에 붙느라 빙 돌아오는 꼬리를 잘라냄
+// (경로 서버는 점을 가장 가까운 길에 붙이는데, 그게 다리 밑·건너편 길이면 갈고리 모양이 생김)
+function trimSpur(coords, p) {
+  if (coords.length < 3) return coords;
+  const kx = 111320 * Math.cos(p.lat * Math.PI / 180), ky = 110574;
+  const de = haversine(p.lat, p.lng, coords.at(-1)[0], coords.at(-1)[1]);
+  let tail = 0, best = null;
+  for (let i = coords.length - 1; i > 0 && tail <= 400; i--) {
+    const q = coords[i], r = coords[i - 1];
+    const vx = (q[1] - r[1]) * kx, vy = (q[0] - r[0]) * ky;
+    const wx = (p.lng - r[1]) * kx, wy = (p.lat - r[0]) * ky;
+    const t = Math.max(0, Math.min(1, (vx * wx + vy * wy) / (vx * vx + vy * vy || 1)));
+    const d = Math.hypot(wx - t * vx, wy - t * vy), seg = Math.hypot(vx, vy);
+    const along = tail + (1 - t) * seg;
+    if (d <= 25 && (!best || along - d > best.gain)) {
+      const ele = r[2] != null && q[2] != null ? r[2] + t * (q[2] - r[2]) : r[2] ?? q[2];
+      best = { gain: along - d, cut: [...coords.slice(0, i), [r[0] + t * (q[0] - r[0]), r[1] + t * (q[1] - r[1]), ele]] };
+    }
+    tail += seg;
+  }
+  return best && best.gain + de > 40 ? best.cut : coords;
 }
 
 // 모든 구간을 이어 하나의 트랙으로. 직선 구간 고도는 양 끝 고도로 보간.
