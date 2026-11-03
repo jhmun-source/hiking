@@ -162,6 +162,8 @@
   .acc-icon { width: 24px; height: 24px; border-radius: 6px; color: #fff; display: grid; place-items: center; font: 700 13px system-ui; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
   .summit-icon { font: 700 16px system-ui; text-shadow: 0 0 2px #fff, 0 0 2px #fff; line-height: 1; }
   .done-tag { color: var(--accent); font-weight: 700; }
+  .done-bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+  .done-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
 
   /* 지도 사진 맞추기 */
   .georef { position: fixed; inset: 0; z-index: 3000; background: var(--bg); display: flex; flex-direction: column; }
@@ -263,6 +265,12 @@
       <label class="chk" style="margin:4px 0 8px"><input type="checkbox" class="loopOnly"> 원점회귀만 (출발지로 돌아오는 코스)</label>
       <div id="mBrowse">
         <h2 id="doneCount" style="margin-top:4px"></h2>
+        <div class="done-bar"><i id="doneBar"></i></div>
+        <div class="seg" id="doneSeg" style="margin:6px 0">
+          <button data-f="all" class="on">모든 산</button>
+          <button data-f="todo">안 간 산</button>
+          <button data-f="done">다녀온 산</button>
+        </div>
         <div class="row" style="margin-top:0">
           <input type="text" id="mSearch" placeholder="산 이름 검색 (예: 금정산)" style="flex:3">
           <button class="btn" id="mNear">지도 근처</button>
@@ -1560,7 +1568,7 @@ $('importFile').onchange = $('importAny').onchange = async (e) => {
 function loadGpxText(text, fileName) {
   const doc = new DOMParser().parseFromString(text, 'application/xml');
   const backup = doc.getElementsByTagNameNS(BACKUP_NS, 'courses')[0];
-  if (backup) { restoreBackup(backup.textContent); return true; }
+  if (backup) { restoreBackup(backup.textContent, doc.getElementsByTagNameNS(BACKUP_NS, 'climbed')[0]?.textContent); return true; }
   let nodes = [...doc.getElementsByTagName('trkpt')];
   if (!nodes.length) nodes = [...doc.getElementsByTagName('rtept')];
   const pts = nodes.map(n => {
@@ -2503,8 +2511,8 @@ $('sSearch').oninput = refreshSaved;
 
 // 전체 백업: 코스마다 <trk> 하나 (다른 앱에서도 GPX로 열림) + 이 앱이 되살릴 원본을 <extensions>에
 $('backupBtn').onclick = () => {
-  const list = loadSaved();
-  if (!list.length) { toast('저장된 코스가 없어요'); return; }
+  const list = loadSaved(), climbed = loadDone();
+  if (!list.length && !Object.keys(climbed).length) { toast('저장된 코스도 완등 기록도 없어요'); return; }
   const trks = list.map(c => {
     const pts = c.segments.flatMap((s, i) => i ? s.coords.slice(1) : s.coords);
     return `  <trk>
@@ -2518,17 +2526,26 @@ ${pts.map(p => `      <trkpt lat="${(+p[0]).toFixed(7)}" lon="${(+p[1]).toFixed(
   const gpx = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="등산 코스 메이커" xmlns="http://www.topografix.com/GPX/1/1" xmlns:hcm="${BACKUP_NS}">
   <metadata><name>코스 백업 (${list.length}개)</name><time>${new Date().toISOString()}</time></metadata>
-  <extensions><hcm:courses>${esc(JSON.stringify(list))}</hcm:courses></extensions>
+  <extensions><hcm:courses>${esc(JSON.stringify(list))}</hcm:courses><hcm:climbed>${esc(JSON.stringify(climbed))}</hcm:climbed></extensions>
 ${trks}
 </gpx>`;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([gpx], { type: 'application/gpx+xml' }));
   a.download = `코스_백업_${kstDate(new Date())}.gpx`;
   a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  toast(`코스 ${list.length}개를 백업 파일로 저장했어요 (다운로드 폴더)`);
+  const nc = Object.keys(climbed).length;
+  toast(`코스 ${list.length}개${nc ? `와 완등 기록 ${nc}개` : ''}를 백업 파일로 저장했어요 (다운로드 폴더)`);
 };
 // 백업 되살리기: 이미 있는 코스(같은 id)는 건너뛰고 없는 것만 추가
-function restoreBackup(json) {
+function restoreBackup(json, climbedJson) {
+  // 완등 기록: 없는 산만 더함 (이 기기에 이미 있는 날짜는 그대로)
+  let nClimb = 0;
+  try {
+    const inc = JSON.parse(climbedJson || '{}'), done = loadDone();
+    for (const [m, d] of Object.entries(inc)) if (!done[m]) { done[m] = d; nClimb++; }
+    if (nClimb) store.set('climbed', JSON.stringify(done));
+  } catch {}
+  if (nClimb) setTimeout(() => toast(`완등 기록 ${nClimb}개도 되살렸어요`), 2800);
   let incoming;
   try { incoming = JSON.parse(json); } catch { incoming = null; }
   if (!Array.isArray(incoming)) { toast('백업 파일을 읽지 못했어요'); return; }
@@ -2641,15 +2658,21 @@ async function renderMountains(mode) {
   const c = map.getCenter();
   let list = [...idx.mountains, ...idx.extra].map(m => ({ ...m, d: distToBox(c, m.b), n: m.courses.filter(courseOk).length }));
   if (q) list = list.filter(m => m.m.includes(q));
+  const doneNow = loadDone();
+  // 완등 필터: 안 간 산 / 다녀온 산 (100대 명산만)
+  if (doneFilter === 'todo') list = list.filter(m => m.courses.length && !doneNow[m.m]);
+  else if (doneFilter === 'done') list = list.filter(m => doneNow[m.m]);
   const filtered = cFilter.dist !== 'all' || cFilter.loop;
   if (filtered) list = list.filter(m => m.n > 0);
   if (mode === 'near' || !q) list.sort((a, b) => a.d - b.d);
   const done = loadDone();
   const nDone = idx.mountains.filter(m => done[m.m]).length;
-  $('doneCount').textContent = `100대 명산 완등 ${nDone} / ${idx.mountains.length}` + (nDone ? '' : ' · 산을 열고 "완등 표시"를 누르면 기록돼요');
+  $('doneCount').textContent = `100대 명산 완등 ${nDone} / ${idx.mountains.length}` + (nDone ? ` (${Math.round(nDone / idx.mountains.length * 100)}%)` : ' · 산을 열고 "완등 표시"를 누르면 기록돼요');
+  $('doneBar').style.width = `${nDone / idx.mountains.length * 100}%`;
   const ul = $('mList'); ul.innerHTML = '';
   if (!list.length) {
-    ul.innerHTML = filtered ? '<li class="empty">조건에 맞는 코스가 없어요. 거리나 원점회귀 조건을 바꿔 보세요.</li>'
+    ul.innerHTML = doneFilter === 'done' && !q ? '<li class="empty">아직 완등 표시한 산이 없어요.</li>'
+      : filtered ? '<li class="empty">조건에 맞는 코스가 없어요. 거리나 원점회귀 조건을 바꿔 보세요.</li>'
       : '<li class="empty">목록에 없는 산이에요. 다른 이름으로 검색하거나 직접 그려 주세요.</li>';
     return;
   }
@@ -2666,6 +2689,11 @@ async function renderMountains(mode) {
   });
 }
 $('mSearch').addEventListener('input', () => renderMountains());
+let doneFilter = store.get('doneFilter') || 'all';
+document.querySelectorAll('#doneSeg button').forEach(b => {
+  b.classList.toggle('on', b.dataset.f === doneFilter);
+  b.onclick = () => { doneFilter = b.dataset.f; store.set('doneFilter', doneFilter); document.querySelectorAll('#doneSeg button').forEach(x => x.classList.toggle('on', x === b)); renderMountains(); };
+});
 $('mNear').onclick = () => { $('mSearch').value = ''; renderMountains('near'); };
 
 // entry: 목록의 산 (산림청에만 있는 산은 courses가 비어 있음). 정상 표시에서 열면 이름으로 찾음
