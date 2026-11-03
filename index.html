@@ -333,8 +333,9 @@
       <div class="row">
         <button class="btn" id="saveBtn" disabled>코스 저장</button>
         <button class="btn" id="dlBtn" disabled>GPX 저장</button>
+        <button class="btn" id="linkBtn" disabled>🔗 링크 공유</button>
       </div>
-      <p class="hint">"워치 앱으로 보내기"를 누르고 공유 목록에서 Zepp을 고르세요. 공유 창이 안 뜨면 GPX 파일로 저장돼요.</p>
+      <p class="hint">"워치 앱으로 보내기"를 누르고 공유 목록에서 Zepp을 고르세요. 공유 창이 안 뜨면 GPX 파일로 저장돼요. "링크 공유"는 카톡 등으로 보내면 받는 사람이 링크를 눌러 이 앱에서 같은 코스를 바로 열어요.</p>
       <h2>길 잇는 방식 <span style="font-weight:400">(다음에 찍는 지점부터)</span></h2>
       <div class="row" style="margin-top:0" id="modePick">
         <button class="btn" data-mode="auto">⛰️ 등산로</button>
@@ -1069,7 +1070,7 @@ function render() {
   $('sUp').textContent = stats ? Math.round(stats.up) + ' m' : '0 m';
   $('sMax').textContent = stats && isFinite(stats.max) ? Math.round(stats.max) + ' m' : '-';
   const has = segments.length > 0;
-  ['shareBtn', 'saveBtn', 'dlBtn'].forEach(id => $(id).disabled = !has);
+  ['shareBtn', 'saveBtn', 'dlBtn', 'linkBtn'].forEach(id => $(id).disabled = !has);
   drawChart();
   updatePlan();
   updateNav();
@@ -2968,6 +2969,64 @@ async function openSharedGpx() {
   history.replaceState(null, '', location.pathname);
 }
 if (new URLSearchParams(location.search).has('shared')) openSharedGpx();
+
+// ---------- 코스 링크 공유 ----------
+// 코스 전체(이름·지점·구간 모양·고도)를 줄여서 주소 뒤(#c=…)에 담음. 서버에 아무것도 올리지 않음
+// 점은 1e-5도(약 1 m) 정수, 앞 점과의 차이만 → JSON → deflate → base64url
+function simplify(c, tol) { // 더글러스-포이커, tol은 m. 양 끝점은 항상 남김
+  if (c.length < 3) return c;
+  const keep = new Uint8Array(c.length); keep[0] = keep[c.length - 1] = 1;
+  const kx = 111320 * Math.cos(c[0][0] * Math.PI / 180), ky = 110574;
+  const stack = [[0, c.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop(); let md = 0, mi = -1;
+    const ax = c[a][1] * kx, ay = c[a][0] * ky, vx = c[b][1] * kx - ax, vy = c[b][0] * ky - ay, L = vx * vx + vy * vy || 1;
+    for (let i = a + 1; i < b; i++) {
+      const wx = c[i][1] * kx - ax, wy = c[i][0] * ky - ay, t = Math.max(0, Math.min(1, (wx * vx + wy * vy) / L));
+      const d = Math.hypot(wx - t * vx, wy - t * vy); if (d > md) { md = d; mi = i; }
+    }
+    if (md > tol) { keep[mi] = 1; stack.push([a, mi], [mi, b]); }
+  }
+  return c.filter((_, i) => keep[i]);
+}
+const b64u = (u8) => btoa(Array.from(u8, b => String.fromCharCode(b)).join('')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), ch => ch.charCodeAt(0));
+async function pipe(u8, stream) { return new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(stream)).arrayBuffer()); }
+async function courseLink() {
+  const total = segments.reduce((t, s) => t + s.coords.length, 0);
+  const tol = total > 3000 ? 4 : total > 800 ? 2 : 0; // 워치 기록처럼 점이 많으면 모양이 거의 안 변하게 솎음
+  const pack = (c) => { let la = 0, lo = 0, el = 0; return c.flatMap(p => { const a = Math.round(p[0] * 1e5), o = Math.round(p[1] * 1e5), e = p[2] == null ? 0 : Math.round(p[2]); const r = [a - la, o - lo, e - el]; la = a; lo = o; el = e; return r; }); };
+  const data = { v: 1, n: routeName(), k: courseKind(),
+    w: waypoints.map(w => [Math.round(w.lat * 1e5), Math.round(w.lng * 1e5), w.name || '']),
+    s: segments.map(sg => [sg.mode, tol ? pack(simplify(sg.coords, tol)) : pack(sg.coords), sg.coords.some(p => p[2] != null) ? 1 : 0]) };
+  const z = await pipe(new TextEncoder().encode(JSON.stringify(data)), new CompressionStream('deflate-raw'));
+  return location.origin + location.pathname + '#c=' + b64u(z);
+}
+async function openLink(code) {
+  const data = JSON.parse(new TextDecoder().decode(await pipe(unb64u(code), new DecompressionStream('deflate-raw'))));
+  const unpack = (d, hasEle) => { const out = []; let la = 0, lo = 0, el = 0; for (let i = 0; i < d.length; i += 3) { la += d[i]; lo += d[i + 1]; el += d[i + 2]; out.push([la / 1e5, lo / 1e5, hasEle ? el : null]); } return out; };
+  if (waypoints.length > 1 && !confirm(`받은 코스 "${data.n}"을(를) 열까요? 지금 그리던 코스는 지워져요.`)) return;
+  openCourse({ name: data.n,
+    waypoints: data.w.map(w => ({ lat: w[0] / 1e5, lng: w[1] / 1e5, name: w[2] })),
+    segments: data.s.map(s => ({ mode: s[0], coords: unpack(s[1], s[2]), error: null })) });
+  if (data.k === '러닝' || data.k === '등산') setMode(data.k === '러닝' ? 'run' : 'auto');
+  toast(`받은 코스 "${data.n}"을(를) 열었어요. "코스 저장"을 누르면 내 코스에 남아요.`);
+}
+$('linkBtn').onclick = async () => {
+  let url;
+  try { url = await courseLink(); } catch { toast('이 브라우저에서는 링크를 만들 수 없어요. GPX 저장을 써 주세요.'); return; }
+  const title = routeName();
+  if (navigator.share) { try { await navigator.share({ title, text: `${title} (등산 코스 메이커)`, url }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  try { await navigator.clipboard.writeText(url); toast('링크를 복사했어요. 카톡 등에 붙여 넣어 보내세요.'); }
+  catch { prompt('이 링크를 복사해서 보내세요', url); }
+};
+async function checkLink() {
+  const m = /^#c=([\w-]+)/.exec(location.hash); if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search); // 새로고침해도 다시 안 열리게
+  try { await openLink(m[1]); } catch { toast('링크가 잘렸거나 잘못돼서 코스를 열 수 없어요.'); }
+}
+addEventListener('hashchange', checkLink);
+checkLink();
 // 파일 열기(지원하는 기기): manifest file_handlers
 if ('launchQueue' in window) {
   window.launchQueue.setConsumer(async (params) => {
