@@ -2609,6 +2609,7 @@ $('tClose').onclick = () => { closeSeries(); refreshTrek(); };
 // 두루누비 코리아둘레길은 trails/에 미리 넣어 둠 (두루누비 GPX 서버가 브라우저에서 직접 읽는 걸 막아서)
 function drTrails() { return []; }
 store.set('durunubi', ''); // 예전 버전이 기기에 저장해 둔 실시간 목록 정리 (중복 방지)
+store.set('fsKey', ''); // 예전 설정 탭에 넣었던 공공데이터포털 키 (이제 앱이 쓰지 않아서 기기에서 지움)
 
 // ---------- 다른 앱에서 GPX 받기 (공유 메뉴 / 파일 열기) ----------
 // 공유: manifest share_target → sw.js가 파일을 'shared' 캐시에 넣고 ./?shared=1 로 열어 줌
