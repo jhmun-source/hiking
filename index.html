@@ -334,7 +334,7 @@
         <button class="btn" data-mode="run">🏃 러닝</button>
         <button class="btn" data-mode="line">📏 직선</button>
       </div>
-      <p class="hint" style="margin-top:4px">러닝: 보도·다리·공원길로 가장 짧게 이어요. 지도 오른쪽 ⛰️ 🏃 📏 버튼으로도 바꿀 수 있어요.</p>
+      <p class="hint" style="margin-top:4px">러닝: 하천 산책로·공원길·자전거길을 먼저 찾고, 차도는 조금 돌아가더라도 피해요. 지도 오른쪽 ⛰️ 🏃 📏 버튼으로도 바꿀 수 있어요.</p>
       <h2>지점 <span style="font-weight:400">(지도 마커를 끌어서 옮길 수 있어요)</span></h2>
       <ul class="list" id="wplist"></ul>
       <div class="row">
@@ -431,7 +431,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-03d · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-03e · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -603,19 +603,70 @@ function limited(fn) {
 }
 const routeCache = new Map();
 // pts: [[lat,lng], ...] (2개 이상) → 그 점들을 차례로 지나는 등산로 경로 [[lat,lng,ele], ...]
-// 러닝은 'shortest' (걸어갈 수 있는 길 중 가장 짧은 길: 차도 옆 보도·다리도 그대로 지나감, 고속도로만 제외)
+// 러닝은 'run' (아래 RUN_PROFILE): 보도·자전거길·하천변 산책로·공원길을 우선하고, 차도는 돌아가더라도 피함
+// (예: 청계천 3 km 구간에서 shortest는 7%만 산책로, 이 프로필은 거의 전부 산책로). 고속도로는 제외
+const RUN_PROFILE = `---context:global
+assign downhillcost 0
+assign downhillcutoff 1.5
+assign uphillcost 0
+assign uphillcutoff 1.5
+assign turnInstructionMode = 0
+assign validForFoot 1
+---context:way
+assign turncost 0
+assign initialclassifier = if route=ferry then 1 else 0
+assign initialcost switch route=ferry 10000 0
+assign defaultaccess switch access= ( if motorroad=yes then false else if highway=motorway|motorway_link then false else true ) switch or access=private access=no false true
+assign footaccess or bicycle=dismount switch foot= defaultaccess not or foot=private or foot=no foot=use_sidepath
+assign accesspenalty switch footaccess 0 100000
+assign walkable_road = or sidewalk=both|left|right|yes or foot=designated|yes highway=living_street
+assign costfactor
+  add accesspenalty
+  switch and highway= not route=ferry 100000
+  switch route=ferry 5.67
+  switch or highway=motorway highway=motorway_link 100000
+  switch or highway=proposed highway=abandoned|construction 100000
+  switch highway=footway|path|pedestrian|cycleway|track|bridleway 1
+  switch highway=steps 1.5
+  switch highway=living_street 1.2
+  switch highway=service|residential|unclassified|road ( if walkable_road then 1.6 else 2.0 )
+  switch highway=tertiary|tertiary_link ( if walkable_road then 2.4 else 3.0 )
+  switch highway=secondary|secondary_link ( if walkable_road then 2.8 else 3.5 )
+  switch highway=primary|primary_link|trunk|trunk_link ( if walkable_road then 3.2 else 4.0 )
+  1.5
+assign priorityclassifier = 0
+assign classifiermask = 0
+---context:node
+assign defaultaccess switch access= 1 switch or access=private access=no 0 1
+assign footaccess or bicycle=dismount switch foot= defaultaccess switch or foot=private foot=no 0 1
+assign initialcost switch footaccess 0 1000000
+`;
+// brouter.de에 올려 두고 받은 이름(custom_…)으로 씀. 서버가 잊어버리면(500) 다시 올림
+let runProfileId = null;
+async function runProfile(fresh) {
+  if (fresh) runProfileId = null;
+  return runProfileId ||= fetch('https://brouter.de/brouter/profile', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: RUN_PROFILE })
+    .then(r => r.json()).then(j => { if (!j.profileid) throw new Error(j.error || 'profile'); return j.profileid; })
+    .catch(e => { runProfileId = null; throw e; });
+}
 async function brouter(pts, profile = 'hiking-mountain') {
   const lonlats = pts.map(p => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join('|');
   const key = profile + ':' + lonlats;
   if (routeCache.has(key)) return routeCache.get(key).map(c => c.slice());
-  const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=${profile}&alternativeidx=0&format=geojson`;
+  let reuploaded = false;
   for (let attempt = 0; ; attempt++) {
+    let name = profile;
+    if (profile === 'run') {
+      try { name = await runProfile(); } catch { name = 'shortest'; } // 올리기가 안 되면 예전 방식(가장 짧은 길)
+    }
+    const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=${name}&alternativeidx=0&format=geojson`;
     const { status, txt } = await limited(async () => { const r = await fetch(url); return { status: r.status, txt: await r.text() }; });
     if (status === 200 && txt.trim()[0] === '{') {
       const coords = JSON.parse(txt).features[0].geometry.coordinates.map(c => [c[1], c[0], c[2] ?? null]);
       routeCache.set(key, coords);
       return coords.map(c => c.slice());
     }
+    if (profile === 'run' && name !== 'shortest' && status === 500 && !reuploaded) { reuploaded = true; await runProfile(true).catch(() => {}); continue; }
     if (![403, 429, 503].includes(status) || attempt >= 3) throw new Error(txt.slice(0, 120));
     setStatus('경로 서버가 바빠서 잠시 기다리는 중…');
     await new Promise(r => setTimeout(r, 2000 * 2 ** attempt));
@@ -640,7 +691,7 @@ async function computeSegment(si) {
   seg.coords = [[a.lat, a.lng, null], [b.lat, b.lng, null]];
   render(); setStatus('경로 탐색 중…');
   try {
-    const coords = await brouter([[a.lat, a.lng], [b.lat, b.lng]], seg.mode === 'run' ? 'shortest' : 'hiking-mountain');
+    const coords = await brouter([[a.lat, a.lng], [b.lat, b.lng]], seg.mode === 'run' ? 'run' : 'hiking-mountain');
     if (seg.token !== token) return;
     seg.coords = coords;
     const gapA = haversine(a.lat, a.lng, seg.coords[0][0], seg.coords[0][1]);
@@ -1027,7 +1078,7 @@ $('editBtn').onclick = () => {
 // 연결 방식: 등산로 → 러닝(도로·다리) → 직선 → 등산로 … (러닝하는 사람이 매번 바꾸지 않게 기억)
 const MODES = {
   auto: ['등산로', '다음 구간은 등산로를 따라 이어져요'],
-  run: ['러닝', '다음 구간은 러닝 길(보도·다리·공원길)로 이어져요'],
+  run: ['러닝', '다음 구간은 하천 산책로·공원길 위주로 이어져요 (차도는 되도록 피함)'],
   line: ['직선', '다음 구간은 직선으로 이어져요'],
 };
 function setMode(m) {
