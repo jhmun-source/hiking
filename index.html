@@ -471,7 +471,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-04a · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-04b · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -1041,7 +1041,7 @@ function fullTrack() {
   segments.forEach((s, i) => {
     const c = s.coords.map(p => p.slice());
     if (i > 0 && pts.length) c.shift();
-    pts.push(...c);
+    for (const p of c) pts.push(p); // push(...c)는 점이 수만 개(긴 워치 기록)면 멈춤
   });
   for (let i = 0; i < pts.length; i++) {
     if (pts[i][2] != null) continue;
@@ -3155,20 +3155,30 @@ async function pipe(u8, stream) { return new Uint8Array(await new Response(new B
 async function courseLink() {
   const total = segments.reduce((t, s) => t + s.coords.length, 0);
   const tol = total > 3000 ? 4 : total > 800 ? 2 : 0; // 워치 기록처럼 점이 많으면 모양이 거의 안 변하게 솎음
-  const pack = (c) => { let la = 0, lo = 0, el = 0; return c.flatMap(p => { const a = Math.round(p[0] * 1e5), o = Math.round(p[1] * 1e5), e = p[2] == null ? 0 : Math.round(p[2]); const r = [a - la, o - lo, e - el]; la = a; lo = o; el = e; return r; }); };
-  const data = { v: 1, n: routeName(), k: courseKind(),
+  // 고도가 없는 점은 앞 점 고도를 그대로 두고(차이 0), 그 점 번호를 따로 적어 받는 쪽에서 다시 "없음"으로
+  const pack = (c) => { let la = 0, lo = 0, el = 0; return c.flatMap(p => { const a = Math.round(p[0] * 1e5), o = Math.round(p[1] * 1e5), e = p[2] == null ? el : Math.round(p[2]); const r = [a - la, o - lo, e - el]; la = a; lo = o; el = e; return r; }); };
+  const data = { v: 2, n: routeName(), k: courseKind(),
     w: waypoints.map(w => [Math.round(w.lat * 1e5), Math.round(w.lng * 1e5), w.name || '']),
-    s: segments.map(sg => [sg.mode, tol ? pack(simplify(sg.coords, tol)) : pack(sg.coords), sg.coords.some(p => p[2] != null) ? 1 : 0]) };
+    s: segments.map(sg => {
+      const c = tol ? simplify(sg.coords, tol) : sg.coords, hasEle = c.some(p => p[2] != null);
+      const holes = hasEle ? c.flatMap((p, i) => p[2] == null ? [i] : []) : [];
+      return [sg.mode, pack(c), hasEle ? 1 : 0, ...(holes.length ? [holes] : [])];
+    }) };
   const z = await pipe(new TextEncoder().encode(JSON.stringify(data)), new CompressionStream('deflate-raw'));
   return location.origin + location.pathname + '#c=' + b64u(z);
 }
 async function openLink(code) {
   const data = JSON.parse(new TextDecoder().decode(await pipe(unb64u(code), new DecompressionStream('deflate-raw'))));
-  const unpack = (d, hasEle) => { const out = []; let la = 0, lo = 0, el = 0; for (let i = 0; i < d.length; i += 3) { la += d[i]; lo += d[i + 1]; el += d[i + 2]; out.push([la / 1e5, lo / 1e5, hasEle ? el : null]); } return out; };
+  const unpack = (d, hasEle, holes) => {
+    const out = []; let la = 0, lo = 0, el = 0;
+    for (let i = 0; i < d.length; i += 3) { la += d[i]; lo += d[i + 1]; el += d[i + 2]; out.push([la / 1e5, lo / 1e5, hasEle ? el : null]); }
+    for (const i of holes || []) if (out[i]) out[i][2] = null;
+    return out;
+  };
   if (waypoints.length > 1 && !confirm(`받은 코스 "${data.n}"을(를) 열까요? 지금 그리던 코스는 지워져요.`)) return;
   openCourse({ name: data.n,
     waypoints: data.w.map(w => ({ lat: w[0] / 1e5, lng: w[1] / 1e5, name: w[2] })),
-    segments: data.s.map(s => ({ mode: s[0], coords: unpack(s[1], s[2]), error: null })) });
+    segments: data.s.map(s => ({ mode: s[0], coords: unpack(s[1], s[2], s[3]), error: null })) });
   if (data.k === '러닝' || data.k === '등산') setMode(data.k === '러닝' ? 'run' : 'auto');
   toast(`받은 코스 "${data.n}"을(를) 열었어요. "코스 저장"을 누르면 내 코스에 남아요.`);
 }
