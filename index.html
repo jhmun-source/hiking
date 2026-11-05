@@ -370,7 +370,7 @@
       </div>
       <div class="row"><button class="btn" id="loopBtn">🏃 코스 찾기</button></div>
       <ul class="list" id="loopList"></ul>
-      <p class="hint" style="margin-top:4px" id="loopHint">출발점: 첫 지점이 있으면 그곳, 없으면 내 위치(켜져 있을 때), 아니면 지도 가운데예요. 내 위치는 가까운 산책로 지점으로 옮겨서 출발해요(정확한 위치는 경로 서버에 보내지 않아요). 산책로·자전거길을 많이 지나고, 산길·인도 없는 차도·오르막·같은 길 되밟기는 피하는 코스부터 보여 줘요.</p>
+      <p class="hint" style="margin-top:4px" id="loopHint">출발점: 첫 지점이 있으면 그곳, 없으면 내 위치(켜져 있을 때), 아니면 지도 가운데예요. 내 위치는 가까운 산책로 지점으로 옮겨서 출발해요(정확한 위치는 경로 서버에 보내지 않아요). 산책로·자전거길을 많이 지나고, 산길·인도 없는 차도·오르막·같은 길 되밟기는 피하는 코스부터 보여 줘요. 가까이 강·하천이 있으면 물길을 따라 갔다가 건너편 둑길로 돌아오는 코스도 찾아요.</p>
       <h2>지점 <span style="font-weight:400">(지도 마커를 끌어서 옮길 수 있어요)</span></h2>
       <ul class="list" id="wplist"></ul>
       <div class="row">
@@ -471,7 +471,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-05a · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-05b · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -650,7 +650,9 @@ function wayKind(tags) {
   const hw = t.highway || '';
   if (/^(footway|path|pedestrian|cycleway|track|bridleway)$/.test(hw)) {
     const paved = /^(asphalt|paved|concrete|paving_stones|sett|wood|metal|compacted|fine_gravel|grass_paver)$/.test(t.surface || '');
-    if (t.sac_scale || t.informal || /^(intermediate|bad|horrible|no)$/.test(t.trail_visibility || '') || (+t.estimated_forest_class >= 4 && !paved)) return 'trail';
+    // 숲 속이라도 보행자길·자전거길(footway·pedestrian·cycleway)이나 지정된 길은 강변 숲길(예: 태화강 대숲)이라 산길로 안 봄
+    const wild = /^(path|track|bridleway)$/.test(hw) && !paved && t.foot !== 'designated' && t.bicycle !== 'designated';
+    if (t.sac_scale || t.informal || /^(intermediate|bad|horrible|no)$/.test(t.trail_visibility || '') || (+t.estimated_forest_class >= 4 && wild)) return 'trail';
     return 'good';
   }
   if (hw === 'living_street') return 'good';
@@ -689,7 +691,7 @@ assign walkable_road = or sidewalk=both|left|right|yes or foot=designated|yes hi
 assign paved = surface=asphalt|paved|concrete|paving_stones|sett|wood|metal|compacted|fine_gravel|grass_paver
 assign natural = surface=ground|dirt|earth|mud|sand|grass|rock|stone|clay|unpaved|pebblestone|gravel
 assign mountain = sac_scale=mountain_hiking|demanding_mountain_hiking|alpine_hiking|demanding_alpine_hiking|difficult_alpine_hiking
-assign trail = or sac_scale=hiking|yes|T1-hiking or informal=yes or trail_visibility=intermediate|bad|horrible|no and estimated_forest_class=4|5|6 not paved
+assign trail = or sac_scale=hiking|yes|T1-hiking or informal=yes or trail_visibility=intermediate|bad|horrible|no and estimated_forest_class=4|5|6 and highway=path|track|bridleway and not paved not or foot=designated bicycle=designated
 assign costfactor
   add accesspenalty
   switch and highway= not route=ferry 100000
@@ -865,7 +867,7 @@ function ofmTile(x, y) {
   if (!ofmCache.has(k)) ofmCache.set(k, (async () => {
     ofmTiles ||= fetch('https://tiles.openfreemap.org/planet').then(r => r.json()).then(j => j.tiles[0]);
     const url = (await ofmTiles).replace('{z}', 14).replace('{x}', x).replace('{y}', y);
-    const d = mvtDecode(new Uint8Array(await (await fetch(url)).arrayBuffer()), ['transportation', 'poi']);
+    const d = mvtDecode(new Uint8Array(await (await fetch(url)).arrayBuffer()), ['transportation', 'poi', 'waterway']);
     const n = 2 ** 14;
     const ll = (q) => [Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + q[1]) / n))) * 180 / Math.PI, (x + q[0]) / n * 360 - 180];
     for (const l of Object.values(d)) for (const f of l) f.lines = f.lines.map(line => line.map(ll));
@@ -890,12 +892,29 @@ function pathTile(x, y) {
   })().catch(e => { tilePts.delete(k); throw e; }));
   return tilePts.get(k);
 }
-async function pathsNear(c, rM) {
+async function tilesNear(c, rM, fn) {
   const dLat = rM / 110574, dLng = rM / (111320 * Math.cos(c[0] * Math.PI / 180));
   const [x0, y0] = tileXY(c[0] + dLat, c[1] - dLng), [x1, y1] = tileXY(c[0] - dLat, c[1] + dLng);
   const jobs = [];
-  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) jobs.push(pathTile(x, y));
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) jobs.push(fn(x, y));
   return (await Promise.allSettled(jobs)).flatMap(r => r.status === 'fulfilled' ? r.value : []);
+}
+const pathsNear = (c, rM) => tilesNear(c, rM, pathTile);
+// 이름 있는 강·하천(OpenFreeMap waterway: river·stream·canal) 물길 선을 약 100 m 간격 점으로: [{name, pts}]
+const waterPts = new Map();
+function waterTile(x, y) {
+  const k = x + '/' + y;
+  if (!waterPts.has(k)) waterPts.set(k, ofmTile(x, y).then(d => (d.waterway || [])
+    .filter(f => f.props.name && /^(river|stream|canal)$/.test(f.props.class))
+    .flatMap(f => f.lines.map(l => {
+      const pts = [l[0]];
+      for (let i = 1; i < l.length; i++) {
+        const n = Math.ceil(haversine(l[i - 1][0], l[i - 1][1], l[i][0], l[i][1]) / 100);
+        for (let j = 1; j <= n; j++) pts.push([l[i - 1][0] + (l[i][0] - l[i - 1][0]) * j / n, l[i - 1][1] + (l[i][1] - l[i - 1][1]) * j / n]);
+      }
+      return { name: f.props.name, pts };
+    }))).catch(e => { waterPts.delete(k); throw e; }));
+  return waterPts.get(k);
 }
 // 원하는 자리(ideal) 근처의 좋은 길 위 점. 출발점에서 너무 가깝거나 멀면 안 씀. 없으면 원래 자리
 async function anchor(start, ideal, side) {
@@ -918,9 +937,91 @@ async function oneLoop(start, km, dir) {
     const coords = await brouter([start, a, b, start], 'run', info);
     const len = polyLen(coords) / 1000;
     const st = info.share || { good: 0, trail: 0, road: 0, side: 0, other: 1 };
-    best = { coords, len, st, share: st.good, rep: repeatShare(coords), up: trackStats(coords).up, a, b, dir };
+    best = { coords, len, st, share: st.good, rep: repeatShare(coords), up: trackStats(coords).up, a, b, dir, label: DIR_NAME[dir / 60] + '쪽' };
     if (Math.abs(len - km) / km < 0.12) break;
     side *= km / len;
+  }
+  return best;
+}
+// ---------- 강·하천을 따라 도는 코스 ----------
+// 세모꼴은 강을 따라 길게 뻗은 산책로(예: 태화강)에서 강을 벗어나기 쉬워서, 출발점 800 m 안에 이름 있는 물길이 있으면
+// 물길을 따라 상류·하류로 가서 건너편 둑길로 돌아오는 코스(건너편 길이 없으면 갔다가 되돌아오는 코스)도 후보에 넣음
+const bearing = (a, b) => Math.atan2((b[1] - a[1]) * 111320 * Math.cos(a[0] * Math.PI / 180), (b[0] - a[0]) * 110574) * 180 / Math.PI;
+const angDiff = (a, b) => Math.abs(((a - b) % 360 + 540) % 360 - 180);
+const COMPASS8 = ['북', '북동', '동', '남동', '남', '남서', '서', '북서'];
+// 점 q가 (base에서 h 방향으로 흐르는) 물길의 왼쪽(+)·오른쪽(−)으로 몇 m 떨어졌는지
+function sideOf(q, base, h) {
+  const e = (q[1] - base[1]) * 111320 * Math.cos(base[0] * Math.PI / 180), n = (q[0] - base[0]) * 110574, r = h * Math.PI / 180;
+  return Math.sin(r) * n - Math.cos(r) * e;
+}
+async function findRiver(start) {
+  let best = null, bd = 800;
+  for (const w of await tilesNear(start, 800, waterTile)) {
+    if (w.pts.length < 2) continue;
+    w.pts.forEach((q, i) => {
+      const d = haversine(start[0], start[1], q[0], q[1]);
+      if (d < bd) { bd = d; best = { name: w.name, q, h: bearing(w.pts[Math.max(i - 3, 0)], w.pts[Math.min(i + 3, w.pts.length - 1)]) }; }
+    });
+  }
+  return best;
+}
+// 같은 이름의 물길을 h 방향으로 약 350 m씩 따라가며 점을 모음 (끝나거나 distM이 되면 멈춤)
+async function traceRiver(name, q0, h, distM) {
+  const tr = [q0]; let cur = q0, tot = 0;
+  while (tot < distM) {
+    let nx = null, ns = 1e9;
+    for (const w of await tilesNear(cur, 500, waterTile)) if (w.name === name) for (const q of w.pts) {
+      const d = haversine(cur[0], cur[1], q[0], q[1]);
+      if (d < 150 || d > 450) continue;
+      const a = angDiff(bearing(cur, q), h);
+      if (a > 80) continue;
+      const s = a + Math.abs(d - 350) / 5;
+      if (s < ns) { ns = s; nx = q; }
+    }
+    if (!nx) break;
+    tot += haversine(cur[0], cur[1], nx[0], nx[1]); h = bearing(cur, nx); cur = nx; tr.push(nx);
+  }
+  return tr;
+}
+// 물길을 따라 D m 간 자리와 그곳의 흐름 방향 (물길이 짧으면 끝점)
+function alongPt(tr, D) {
+  for (let i = 1; i < tr.length; i++) {
+    const d = haversine(tr[i - 1][0], tr[i - 1][1], tr[i][0], tr[i][1]);
+    if (D <= d) return { p: [tr[i - 1][0] + (tr[i][0] - tr[i - 1][0]) * D / d, tr[i - 1][1] + (tr[i][1] - tr[i - 1][1]) * D / d], h: bearing(tr[i - 1], tr[i]) };
+    D -= d;
+  }
+  return { p: tr.at(-1), h: bearing(tr.at(-2), tr.at(-1)) };
+}
+// at 근처에서 물길의 sgn쪽(물길에서 20 m 넘게 떨어진) 가장 가까운 산책로 점
+async function bankPt(at, h, sgn, rM) {
+  let best = null, bd = rM;
+  for (const q of await pathsNear(at, rM)) {
+    if (sideOf(q, at, h) * sgn < 20) continue;
+    const d = haversine(at[0], at[1], q[0], q[1]);
+    if (d < bd) { bd = d; best = q; }
+  }
+  return best;
+}
+async function riverLoop(start, km, rv, h) {
+  const tr = await traceRiver(rv.name, rv.q, h, km * 750);
+  if (tr.length < 3) return null; // 그쪽으로 물길이 800 m도 안 이어지면 안 씀
+  const sgn = Math.sign(sideOf(start, rv.q, h)) || 1; // 출발점이 있는 쪽 둑
+  const C = await bankPt(rv.q, h, -sgn, 400); // 돌아올 때 건너편 둑의 출발점 맞은편
+  let D = km * 1000 * (C ? 0.42 : 0.5), best = null;
+  for (let t = 0; t < 2; t++) {
+    const f = alongPt(tr, D);
+    const A = await bankPt(f.p, f.h, sgn, 400);
+    if (!A) break;
+    const B = C && await bankPt(f.p, f.h, -sgn, 400);
+    const info = {};
+    const coords = await brouter(B ? [start, A, B, C, start] : [start, A, start], 'run', info);
+    const len = polyLen(coords) / 1000;
+    const st = info.share || { good: 0, trail: 0, road: 0, side: 0, other: 1 };
+    const rep = repeatShare(coords);
+    best = { coords, len, st, share: st.good, rep, up: trackStats(coords).up, a: A, b: B || A,
+      label: `${rv.name} 따라 ${COMPASS8[Math.round(((bearing(start, f.p) + 360) % 360) / 45) % 8]}쪽${B && rep < 0.3 ? '·건너편으로 돌아옴' : ' 왕복'}` };
+    if (Math.abs(len - km) / km < 0.12) break;
+    D *= km / len;
   }
   return best;
 }
@@ -936,7 +1037,10 @@ $('loopBtn').onclick = async () => {
   const st = await loopStart();
   $('loopList').innerHTML = `<li class="empty">${st.name}에서 ${km} km 코스를 찾는 중… (10~30초)${st.note ? `<br>${st.note}` : ''}</li>`;
   const dirs = [0, 60, 120, 180, 240, 300];
-  const res = (await Promise.allSettled(dirs.map(d => oneLoop(st.p, km, d)))).filter(r => r.status === 'fulfilled').map(r => r.value);
+  const jobs = dirs.map(d => oneLoop(st.p, km, d));
+  const rv = await findRiver(st.p).catch(() => null);
+  if (rv) jobs.push(riverLoop(st.p, km, rv, rv.h), riverLoop(st.p, km, rv, rv.h + 180));
+  const res = (await Promise.allSettled(jobs)).filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
   loopBusy = false; $('loopBtn').disabled = false;
   res.forEach(c => c.score = loopScore(c, km));
   // 서로 거의 같은 길은 하나만
@@ -967,7 +1071,7 @@ function drawLoops(sel) {
   const ul = $('loopList'); ul.innerHTML = '';
   loopCands.forEach((c, i) => {
     const li = document.createElement('li');
-    li.innerHTML = `<span class="n" style="background:${LOOP_COLORS[i]};color:#fff">${i + 1}</span><span class="name"><b>${c.len.toFixed(1)} km</b> · ${DIR_NAME[c.dir / 60]}쪽 · 산책로 ${Math.round(c.st.good * 100)}%${c.st.road >= 0.05 ? ` · 차도 ${Math.round(c.st.road * 100)}%` : ''}${c.st.trail >= 0.05 ? ` · 산길 ${Math.round(c.st.trail * 100)}%` : ''} · 오르막 ${Math.round(c.up)} m${c.rep > 0.15 ? ` · 같은 길 ${Math.round(c.rep * 100)}%` : ''}</span>` + (i === sel ? '<button class="primary">이 코스로</button>' : '');
+    li.innerHTML = `<span class="n" style="background:${LOOP_COLORS[i]};color:#fff">${i + 1}</span><span class="name"><b>${c.len.toFixed(1)} km</b> · ${c.label} ·산책로 ${Math.round(c.st.good * 100)}%${c.st.road >= 0.05 ? ` · 차도 ${Math.round(c.st.road * 100)}%` : ''}${c.st.trail >= 0.05 ? ` · 산길 ${Math.round(c.st.trail * 100)}%` : ''} · 오르막 ${Math.round(c.up)} m${c.rep > 0.15 ? ` · 같은 길 ${Math.round(c.rep * 100)}%` : ''}</span>` + (i === sel ? '<button class="primary">이 코스로</button>' : '');
     li.querySelector('.name').onclick = () => drawLoops(i);
     li.querySelector('button')?.addEventListener('click', () => useLoop(i));
     if (i === sel) li.style.fontWeight = '600';
