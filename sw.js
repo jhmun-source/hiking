@@ -1,5 +1,5 @@
 // 앱 화면은 오프라인에서도 열리게, 지도 타일은 본 것만 캐시 (대량 다운로드 안 함)
-const SHELL_CACHE = 'shell-v14';
+const SHELL_CACHE = 'shell-v15';
 const TILE_CACHE = 'tiles-v1';
 const SAVED_TILES = 'tiles-saved'; // 계획 탭 "이 코스 지도 저장"으로 받은 지도 (자동으로 지우지 않음)
 const TILE_LIMIT = 3000;
@@ -29,15 +29,15 @@ async function trimTiles() {
   for (let i = 0; i < keys.length - TILE_LIMIT; i++) await cache.delete(keys[i]);
 }
 
-// 다른 앱의 공유 메뉴에서 GPX를 보내면(manifest share_target) 파일을 잠시 보관하고 앱을 ?shared=1 로 엶
+// 다른 앱의 공유 메뉴에서 코스 파일(GPX·KML·KMZ·TCX·FIT)을 보내면(manifest share_target) 파일을 잠시 보관하고 앱을 ?shared=1 로 엶
 async function receiveShare(req) {
   try {
     const form = await req.formData();
     const file = form.getAll('gpx').find(f => f && typeof f.text === 'function');
     if (file) {
       const cache = await caches.open('shared');
-      await cache.put('shared-gpx', new Response(await file.text(), {
-        headers: { 'content-type': 'application/gpx+xml', 'x-filename': encodeURIComponent(file.name || 'shared.gpx') },
+      await cache.put('shared-gpx', new Response(file, { // FIT은 이진 파일이라 글자로 바꾸지 않고 그대로
+        headers: { 'content-type': 'application/octet-stream', 'x-filename': encodeURIComponent(file.name || 'shared.gpx') },
       }));
     }
   } catch (err) {}

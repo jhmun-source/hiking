@@ -416,18 +416,18 @@
         <button class="btn" id="backupBtn">전체 백업</button>
       </div>
       <ul class="list" id="savedList"></ul>
-      <p class="hint">전체 백업: 저장된 코스를 GPX 파일 하나(코스_백업_날짜.gpx)로 내려받아요. 폰을 바꾸거나 앱 데이터가 지워졌을 때 아래 "GPX 파일 불러오기"로 그 파일을 열면 코스가 다시 들어와요.</p>
+      <p class="hint">전체 백업: 저장된 코스를 GPX 파일 하나(코스_백업_날짜.gpx)로 내려받아요. 폰을 바꾸거나 앱 데이터가 지워졌을 때 아래 "코스 파일 불러오기"로 그 파일을 열면 코스가 다시 들어와요.</p>
 
-      <h2>GPX 불러오기</h2>
+      <h2>코스 파일 불러오기 <span style="font-weight:400">(GPX·KML·KMZ·TCX·FIT)</span></h2>
       <div class="row" style="margin-top:0">
-        <button class="btn" id="importBtn">GPX 파일 불러오기</button>
-        <input type="file" id="importFile" accept=".gpx,application/gpx+xml" hidden>
+        <button class="btn" id="importBtn">코스 파일 불러오기</button>
+        <input type="file" id="importFile" accept=".gpx,.kml,.kmz,.tcx,.fit,application/gpx+xml,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" hidden>
         <input type="file" id="importAny" hidden>
       </div>
-      <p class="hint" style="margin-top:4px">안드로이드는 GPX를 따로 걸러 주지 않아서 사진 등 다른 파일도 같이 보여요. 파일 고르는 화면 위쪽 돋보기로 "코스_" 나 "러닝"을 검색하면 이 앱에서 받은 파일만 모아 볼 수 있어요. 기기에 따라 받은 GPX가 안 보이면 <a href="#" id="importAnyLink">모든 파일에서 고르기</a>.</p>
+      <p class="hint" style="margin-top:4px">GPX 말고도 구글 어스·내 지도 파일(KML·KMZ), 가민 같은 워치 기록(FIT·TCX)도 열려요. 안드로이드는 코스 파일을 따로 걸러 주지 않아서 사진 등 다른 파일도 같이 보여요. 파일 고르는 화면 위쪽 돋보기로 "코스_" 나 "러닝"을 검색하면 이 앱에서 받은 파일만 모아 볼 수 있어요. 기기에 따라 받은 파일이 안 보이면 <a href="#" id="importAnyLink">모든 파일에서 고르기</a>.</p>
       <div id="importInfo" class="hint"></div>
       <div class="row" id="importActions" hidden>
-        <button class="btn primary" id="importUse">이 GPX를 코스로 쓰기</button>
+        <button class="btn primary" id="importUse">불러온 길을 코스로 쓰기</button>
         <button class="btn" id="importDrop">지우기</button>
       </div>
       <p class="hint">"코스로 쓰기"를 누르면 그대로 저장하거나 워치로 보낼 수 있어요. 누르지 않으면 주황 점선으로만 깔려서 그 위에 새 코스를 따라 그릴 수 있어요.</p>
@@ -471,7 +471,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-05b · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-05c · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -1759,11 +1759,138 @@ $('importAnyLink').onclick = (e) => { e.preventDefault(); $('importAny').click()
 $('importFile').onchange = $('importAny').onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
   e.target.value = '';
-  // 안드로이드는 사진 등도 고를 수 있어서: 이름이 .gpx가 아니고 내용도 XML이 아니면 읽지 않음
-  const head = await f.slice(0, 200).text();
-  if (!/\.gpx$/i.test(f.name) && !/^\s*(<\?xml|<gpx)/i.test(head)) { toast('GPX 파일이 아니에요. 이름이 .gpx로 끝나는 파일을 골라 주세요.'); return; }
-  loadGpxText(await f.text(), f.name);
+  // 안드로이드는 사진 등도 고를 수 있어서: 내용을 보고 코스 파일이 아니면 읽지 않음
+  const gpx = await trackFileToGpx(f).catch(() => null);
+  if (!gpx) { toast('코스 파일이 아니에요. GPX·KML·KMZ·TCX·FIT 파일을 골라 주세요.'); return; }
+  loadGpxText(gpx, f.name);
 };
+// ---------- 다른 형식 → GPX 글자 (그다음은 GPX와 똑같이 처리) ----------
+// KML·KMZ: 구글 어스·구글 내 지도 등, TCX·FIT: 가민·코로스·순토 같은 워치 기록과 코스
+// 파일 이름 대신 내용으로 형식을 알아냄. 코스 파일이 아니면 null
+async function trackFileToGpx(f) {
+  const buf = new Uint8Array(await f.arrayBuffer());
+  const asc = (a, b) => String.fromCharCode(...buf.subarray(a, b));
+  if (buf.length > 14 && asc(8, 12) === '.FIT') return fitToGpx(buf);
+  if (buf[0] === 0x50 && buf[1] === 0x4b) { const kml = await unzipKml(buf); return kml ? kmlToGpx(kml) : null; } // KMZ = zip
+  const text = new TextDecoder().decode(buf), head = text.slice(0, 3000);
+  if (/<TrainingCenterDatabase[\s>]/.test(head)) return tcxToGpx(text);
+  if (/<kml[\s>]/.test(head)) return kmlToGpx(text);
+  if (/<gpx[\s>]/i.test(head) || /\.gpx$/i.test(f.name || '')) return text;
+  return null;
+}
+function toGpx(name, pts, wpts = []) {
+  const esc = (v) => String(v).replace(/[<>&"]/g, c => `&#${c.charCodeAt(0)};`);
+  return '<?xml version="1.0" encoding="UTF-8"?><gpx version="1.1" creator="등산 코스 메이커" xmlns="http://www.topografix.com/GPX/1/1">'
+    + wpts.filter(w => isFinite(w.p[0]) && isFinite(w.p[1])).map(w => `<wpt lat="${w.p[0]}" lon="${w.p[1]}"><name>${esc(w.n)}</name></wpt>`).join('')
+    + `<trk>${name ? `<name>${esc(name)}</name>` : ''}<trkseg>`
+    + pts.map(p => `<trkpt lat="${p[0]}" lon="${p[1]}">${p[2] != null && isFinite(p[2]) ? `<ele>${p[2]}</ele>` : ''}${p[3] ? `<time>${p[3]}</time>` : ''}</trkpt>`).join('')
+    + '</trkseg></trk></gpx>';
+}
+const xmlDoc = (t) => new DOMParser().parseFromString(t, 'application/xml');
+const byTag = (el, tag) => [...el.getElementsByTagNameNS('*', tag)];
+const tagText = (el, tag) => el.getElementsByTagNameNS('*', tag)[0]?.textContent.trim() || '';
+function tcxToGpx(text) {
+  const doc = xmlDoc(text);
+  const pts = byTag(doc, 'Trackpoint').map(tp => {
+    const alt = tagText(tp, 'AltitudeMeters');
+    return [+tagText(tp, 'LatitudeDegrees'), +tagText(tp, 'LongitudeDegrees'), alt === '' ? null : +alt, tagText(tp, 'Time')];
+  }).filter(p => p[0] && p[1] && isFinite(p[0]) && isFinite(p[1])); // 위치 없는 점(신호 없음)은 빼고
+  const wpts = byTag(doc, 'CoursePoint').map(cp => ({ n: tagText(cp, 'Name') || '지점', p: [+tagText(cp, 'LatitudeDegrees'), +tagText(cp, 'LongitudeDegrees')] }));
+  const course = byTag(doc, 'Course')[0];
+  return toGpx(course ? tagText(course, 'Name') : '', pts, wpts);
+}
+function kmlToGpx(text) {
+  const doc = xmlDoc(text), pts = [], wpts = [];
+  // 선(LineString)과 GPS 기록(gx:Track)을 문서 순서대로 이어 붙임
+  for (const el of byTag(doc, '*')) {
+    if (el.localName === 'LineString') {
+      for (const t of tagText(el, 'coordinates').split(/\s+/)) {
+        if (!t) continue;
+        const [lon, lat, alt] = t.split(',').map(Number);
+        if (isFinite(lat) && isFinite(lon)) pts.push([lat, lon, alt != null && isFinite(alt) && alt !== 0 ? alt : null]); // 고도 0은 '없음'인 경우가 많음
+      }
+    } else if (el.localName === 'Track') {
+      const when = byTag(el, 'when');
+      byTag(el, 'coord').forEach((c, i) => {
+        const [lon, lat, alt] = c.textContent.trim().split(/\s+/).map(Number);
+        if (isFinite(lat) && isFinite(lon)) pts.push([lat, lon, isFinite(alt) ? alt : null, when[i]?.textContent.trim() || '']);
+      });
+    }
+  }
+  for (const pm of byTag(doc, 'Placemark')) {
+    const pt = byTag(pm, 'Point')[0]; if (!pt) continue;
+    const [lon, lat] = tagText(pt, 'coordinates').split(',').map(Number);
+    wpts.push({ n: tagText(pm, 'name') || '지점', p: [lat, lon] });
+  }
+  const top = byTag(doc, 'Document')[0] || doc.documentElement;
+  const lineMark = byTag(doc, 'Placemark').find(pm => byTag(pm, 'LineString').length || byTag(pm, 'Track').length);
+  const name = [...top.children].find(c => c.localName === 'name')?.textContent.trim() || (lineMark ? tagText(lineMark, 'name') : '');
+  return toGpx(name, pts, wpts);
+}
+// KMZ(zip) 안의 KML 글자. 압축 풀기는 브라우저 내장 DecompressionStream
+async function unzipKml(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let e = buf.length - 22;
+  while (e >= 0 && dv.getUint32(e, true) !== 0x06054b50) e--;
+  if (e < 0) return null;
+  const n = dv.getUint16(e + 10, true); let o = dv.getUint32(e + 16, true);
+  const ents = [];
+  for (let i = 0; i < n && o + 46 <= buf.length && dv.getUint32(o, true) === 0x02014b50; i++) {
+    const nl = dv.getUint16(o + 28, true), el = dv.getUint16(o + 30, true), cl = dv.getUint16(o + 32, true);
+    ents.push({ name: new TextDecoder().decode(buf.subarray(o + 46, o + 46 + nl)), method: dv.getUint16(o + 10, true), size: dv.getUint32(o + 20, true), off: dv.getUint32(o + 42, true) });
+    o += 46 + nl + el + cl;
+  }
+  const kmls = ents.filter(x => /\.kml$/i.test(x.name));
+  const ent = kmls.find(x => /(^|\/)doc\.kml$/i.test(x.name)) || kmls[0];
+  if (!ent) return null;
+  const start = ent.off + 30 + dv.getUint16(ent.off + 26, true) + dv.getUint16(ent.off + 28, true);
+  const data = buf.subarray(start, start + ent.size);
+  if (ent.method === 0) return new TextDecoder().decode(data);
+  if (ent.method !== 8) return null;
+  return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+}
+// FIT(가민 등 워치의 이진 파일): record(20번 메시지)의 위치·고도·시각, 코스 FIT이면 course(31번) 이름과 course_point(32번)
+function fitToGpx(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const hs = buf[0], end = Math.min(buf.length, hs + dv.getUint32(4, true));
+  const defs = {}, pts = [], wpts = [], dec = new TextDecoder();
+  const SC = 180 / 2 ** 31, EPOCH = 631065600; // 반원(semicircle) → 도, FIT 시각의 기준(1989-12-31 UTC)
+  const okI = (x) => x != null && x !== 0x7fffffff;
+  let o = hs, lastTs = 0, name = '';
+  while (o < end) {
+    const h = buf[o++];
+    if (!(h & 0x80) && (h & 0x40)) { // 정의 메시지: 이 번호(local)의 데이터가 어떤 칸들로 되어 있는지
+      const le = buf[o + 1] === 0, gnum = dv.getUint16(o + 2, le), nf = buf[o + 4];
+      o += 5;
+      const fields = [];
+      for (let i = 0; i < nf; i++, o += 3) fields.push([buf[o], buf[o + 1], buf[o + 2]]);
+      let dev = 0;
+      if (h & 0x20) { const nd = buf[o++]; for (let i = 0; i < nd; i++, o += 3) dev += buf[o + 1]; }
+      defs[h & 0x0f] = { le, gnum, fields, dev };
+      continue;
+    }
+    const comp = !!(h & 0x80), d = defs[comp ? (h >> 5) & 3 : h & 0x0f];
+    if (!d) break; // 형식이 어긋나면 거기까지 읽은 것만
+    const v = {};
+    for (const [num, size, bt] of d.fields) {
+      const t = bt & 0x1f;
+      if (o + size > buf.length) break;
+      if (size === 4 && (t === 5 || t === 6)) v[num] = t === 5 ? dv.getInt32(o, d.le) : dv.getUint32(o, d.le);
+      else if (size === 2 && (t === 3 || t === 4)) v[num] = t === 3 ? dv.getInt16(o, d.le) : dv.getUint16(o, d.le);
+      else if (t === 7) v[num] = dec.decode(buf.subarray(o, o + size)).replace(/\0[\s\S]*$/, '');
+      o += size;
+    }
+    o += d.dev;
+    if (comp) { const off = h & 0x1f, lo = lastTs & 0x1f; lastTs += off - lo + (off < lo ? 0x20 : 0); }
+    else if (v[253] != null && v[253] !== 0xffffffff) lastTs = v[253];
+    if (d.gnum === 20 && okI(v[0]) && okI(v[1])) {
+      const alt = v[78] != null && v[78] !== 0xffffffff ? v[78] / 5 - 500 : v[2] != null && v[2] !== 0xffff ? v[2] / 5 - 500 : null;
+      pts.push([+(v[0] * SC).toFixed(7), +(v[1] * SC).toFixed(7), alt == null ? null : +alt.toFixed(1), lastTs ? new Date((lastTs + EPOCH) * 1000).toISOString() : '']);
+    } else if (d.gnum === 31 && v[5]) name = v[5];
+    else if (d.gnum === 32 && okI(v[2]) && okI(v[3])) wpts.push({ n: v[6] || '지점', p: [+(v[2] * SC).toFixed(7), +(v[3] * SC).toFixed(7)] });
+  }
+  return toGpx(name, pts, wpts);
+}
 // GPX 글자 → 참고용 트랙(주황 점선). 성공하면 true. 전체 백업 파일이면 저장 탭으로 복원
 function loadGpxText(text, fileName) {
   const doc = new DOMParser().parseFromString(text, 'application/xml');
@@ -1775,14 +1902,14 @@ function loadGpxText(text, fileName) {
     const ele = n.getElementsByTagName('ele')[0];
     return [+n.getAttribute('lat'), +n.getAttribute('lon'), ele ? +ele.textContent : null];
   }).filter(p => isFinite(p[0]) && isFinite(p[1]));
-  if (pts.length < 2) { $('importInfo').textContent = '트랙 점을 찾지 못했어요.'; $('importActions').hidden = true; toast('GPX에서 경로를 찾지 못했어요'); return false; }
+  if (pts.length < 2) { $('importInfo').textContent = '트랙 점을 찾지 못했어요.'; $('importActions').hidden = true; toast('파일에서 경로를 찾지 못했어요'); return false; }
   if (refLayer) map.removeLayer(refLayer);
   refTrack = pts;
   // 워치 기록이면 운동한 날짜 (첫 시각, 한국 날짜)
   const t0 = doc.querySelector('trkpt > time, metadata > time')?.textContent;
   refDate = t0 && !isNaN(new Date(t0)) ? kstDate(new Date(t0)) : '';
   const trkName = doc.querySelector('trk > name, metadata > name')?.textContent.trim();
-  refName = trkName || fileName.replace(/\.gpx$/i, '').replace(/^코스_(.+)_(등산|러닝)$/, '$1');
+  refName = trkName || fileName.replace(/\.(gpx|kml|kmz|tcx|fit)$/i, '').replace(/^코스_(.+)_(등산|러닝)$/, '$1');
   // GPX 안의 지점(wpt)도 같이: 갈림길·봉우리 등 (너무 많으면 앞의 200개만)
   refEndNames = ['', ''];
   refPois = [...doc.getElementsByTagName('wpt')].slice(0, 200).map(w => ({
@@ -1823,7 +1950,7 @@ $('importDrop').onclick = dropRef;
 $('importUse').onclick = () => useImported();
 function useImported() {
   if (!refTrack) return;
-  if (waypoints.length && !confirm('지금 그리던 코스를 지우고 불러온 GPX로 바꿀까요?')) return;
+  if (waypoints.length && !confirm('지금 그리던 코스를 지우고 불러온 길로 바꿀까요?')) return;
   const pts = refTrack, name = refName, pois = refPois, ends = refEndNames, date = refDate;
   clearRoute(); dropRef(); routeDate = date;
   [pts[0], pts.at(-1)].forEach((p, i) => {
@@ -1836,7 +1963,7 @@ function useImported() {
   refreshMarkers(); refreshList(); render();
   fitPadded(L.featureGroup(routeLayer.getLayers()).getBounds());
   openTab('course');
-  toast('불러온 GPX를 코스로 바꿨어요. 저장하거나 워치로 보낼 수 있어요.');
+  toast('불러온 길을 코스로 바꿨어요. 저장하거나 워치로 보낼 수 있어요.');
 };
 
 // ---------- 지도 사진 겹치기 ----------
@@ -3260,9 +3387,10 @@ async function openSharedGpx() {
     const res = await cache.match('shared-gpx');
     if (!res) return;
     const name = decodeURIComponent(res.headers.get('x-filename') || 'shared.gpx');
-    const text = await res.text();
+    const gpx = await trackFileToGpx(new File([await res.blob()], name)).catch(() => null);
     await cache.delete('shared-gpx');
-    if (loadGpxText(text, name)) useImported();
+    if (!gpx) toast('코스 파일이 아니에요. GPX·KML·KMZ·TCX·FIT 파일만 열 수 있어요.');
+    else if (loadGpxText(gpx, name)) useImported();
   } catch {}
   history.replaceState(null, '', location.pathname);
 }
@@ -3340,7 +3468,8 @@ if ('launchQueue' in window) {
   window.launchQueue.setConsumer(async (params) => {
     for (const h of params.files || []) {
       const f = await h.getFile();
-      if (loadGpxText(await f.text(), f.name)) { useImported(); break; }
+      const gpx = await trackFileToGpx(f).catch(() => null);
+      if (gpx && loadGpxText(gpx, f.name)) { useImported(); break; }
     }
   });
 }
