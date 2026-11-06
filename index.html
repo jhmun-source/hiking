@@ -487,7 +487,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-07d · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-07e · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -2191,7 +2191,7 @@ function showPick() {
   photo = { ...draft, a: f.a, b: f.b, hidden: false };
   showPhoto(); savePhoto();
   fitPadded(L.latLngBounds([[0, 0], [draft.w, 0], [0, draft.h], [draft.w, draft.h]].map(([x, y]) => photoToLatLng(x, y))));
-  $('mapBannerMsg').textContent = `찾은 위치${fits.length > 1 ? ` ${i + 1}/${fits.length}` : ''}: 사진 속 산 이름·길이 지도와 겹치나요?`;
+  $('mapBannerMsg').textContent = `찾은 위치${fits.length > 1 ? ` ${i + 1}/${fits.length}` : ''} (등산로 위 ${Math.round(f.score * 100)}%${f.off >= 30 ? `, 가장 길게 벗어난 곳 ${Math.round(f.off / 10) * 10} m` : ''}): 사진 속 산 이름·길이 지도와 겹치나요?`;
   $('mapBannerOk').textContent = i + 1 < fits.length ? '다른 후보' : '직접 맞추기'; $('mapBannerOk').hidden = false;
   $('mapBannerCancel').textContent = '맞아요';
   $('mapBanner').hidden = false;
@@ -2440,27 +2440,43 @@ async function courseLinePts(draft, tap, rad) {
 // 사진으로 가져오는 코스는 모두 등산 코스라서, 맞출 때는 오솔길(path)·임도(track)만 기준으로 씀
 // (도시의 촘촘한 차도·인도(footway)는 어떤 선이든 대충 맞아서 도심 한복판에 붙는 원인이 됨)
 // mode 'road'는 차도만: 찾은 자리가 차도 위인지 확인할 때 씀
+// from([lat, lng], 산 정상)이 있으면 그 정상과 등산로로 이어진 길만 씀: 길끼리 꼭짓점이 6 m 안에서 만나면 이어진 것으로 보고,
+// 정상 300 m 안에 닿는 길 묶음만 남김 (끊겨 있는 다른 산의 길·공원 산책로는 기준에서 빠짐)
 const TRAIL_SUB = /^(path|bridleway)$/;
-async function roadField(x0, y0, x1, y1, mode = 'trail') {
+async function roadField(x0, y0, x1, y1, mode = 'trail', from = null) {
   const nw = proj.unproject(L.point(x0, y1)), se = proj.unproject(L.point(x1, y0)); // 메르카토르 y는 북쪽이 큼
   const [tx0, ty0] = tileXY(nw.lat, nw.lng), [tx1, ty1] = tileXY(se.lat, se.lng);
   if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 160) return null;
   const U = 1 / Math.cos(((nw.lat + se.lat) / 2) * Math.PI / 180); // 메르카토르 단위 / 실제 m
   const jobs = [];
   for (let x = tx0; x <= tx1; x++) for (let y = ty0; y <= ty1; y++) jobs.push(ofmTile(x, y));
-  const tgt = [];
+  let lines = [];
   for (const r of await Promise.allSettled(jobs)) {
     if (r.status !== 'fulfilled') continue;
     for (const f of r.value.transportation || []) {
       if (mode === 'road' ? !/^(minor|service|tertiary|secondary|primary|trunk)$/.test(f.props.class) : !(f.props.class === 'track' || (f.props.class === 'path' && TRAIL_SUB.test(f.props.subclass || '')))) continue;
-      for (const l of f.lines) {
-        let prev = null;
-        for (const ll of l) {
-          const p = proj.project(L.latLng(ll[0], ll[1])), q = [p.x, p.y];
-          if (prev) { const d = Math.hypot(q[0] - prev[0], q[1] - prev[1]), n = Math.ceil(d / (8 * U)); for (let j = 1; j < n; j++) tgt.push([prev[0] + (q[0] - prev[0]) * j / n, prev[1] + (q[1] - prev[1]) * j / n]); }
-          tgt.push(q); prev = q;
-        }
-      }
+      for (const l of f.lines) lines.push(l.map(ll => { const p = proj.project(L.latLng(ll[0], ll[1])); return [p.x, p.y]; }));
+    }
+  }
+  if (from && lines.length) {
+    const par = lines.map((_, i) => i), root = (i) => { while (par[i] !== i) i = par[i] = par[par[i]]; return i; };
+    const C = 6 * U, cells = new Map(), key = (i, j) => i * 1048576 + j;
+    lines.forEach((l, li) => { for (const q of l) {
+      const ci = Math.floor(q[0] / C), cj = Math.floor(q[1] / C);
+      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) for (const [lj, x, y] of cells.get(key(ci + di, cj + dj)) || [])
+        if (lj !== li && Math.hypot(x - q[0], y - q[1]) < C) par[root(li)] = root(lj);
+      const k = key(ci, cj); (cells.get(k) || cells.set(k, []).get(k)).push([li, q[0], q[1]]);
+    } });
+    const sp = proj.project(L.latLng(from[0], from[1])), near = new Set();
+    lines.forEach((l, li) => { if (l.some(q => Math.hypot(q[0] - sp.x, q[1] - sp.y) < 300 * U)) near.add(root(li)); });
+    lines = lines.filter((_, li) => near.has(root(li)));
+  }
+  const tgt = [];
+  for (const l of lines) {
+    let prev = null;
+    for (const q of l) {
+      if (prev) { const d = Math.hypot(q[0] - prev[0], q[1] - prev[1]), n = Math.ceil(d / (8 * U)); for (let j = 1; j < n; j++) tgt.push([prev[0] + (q[0] - prev[0]) * j / n, prev[1] + (q[1] - prev[1]) * j / n]); }
+      tgt.push(q); prev = q;
     }
   }
   if (tgt.length < 50) return null;
@@ -2519,13 +2535,31 @@ function fitTools(field, src) {
   // 크기가 다른 후보끼리 비교하는 점수: 평균 거리(m) ÷ √(사진 1픽셀의 m)
   // m로만 재면 코스를 작게 줄여 촘촘한 길에 끼운 게, 픽셀로만 재면 크게 늘려 붙인 게 유리해서 그 중간
   const costMix = (T, pts) => { const s = Math.hypot(T.a[0], T.a[1]) / U, cap = (6 * s + 20) * U; let t = 0; for (const q of pts) t += Math.min(distAt(apT(T, q)), cap); return t / pts.length / U / Math.sqrt(s); };
+  // 등산로에서 25 m 넘게 벗어난 선 점들을 사진 위에서 이어진 덩어리로 묶었을 때 가장 긴 덩어리의 길이(m)
+  // (코스 중간이 등산로를 길게 벗어나면 잘못 겹친 것)
+  const offRun = (T) => {
+    const s = Math.hypot(T.a[0], T.a[1]) / U, off = new Map();
+    for (const q of src) if (distAt(apT(T, q)) > 25 * U) off.set(Math.round(q[0] / 3) * 100000 + Math.round(-q[1] / 3), q);
+    let worst = 0; const seen = new Set();
+    for (const [k0] of off) {
+      if (seen.has(k0)) continue;
+      const st = [k0]; seen.add(k0); let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      while (st.length) {
+        const k = st.pop(), q = off.get(k); x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]);
+        const gx = Math.floor(k / 100000), gy = k - gx * 100000;
+        for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) { const n = (gx + dx) * 100000 + gy + dy; if (off.has(n) && !seen.has(n)) { seen.add(n); st.push(n); } }
+      }
+      worst = Math.max(worst, Math.hypot(x1 - x0, y1 - y0) * s);
+    }
+    return worst;
+  };
   const inlier = (T) => { let ok = 0; for (const q of src) if (distAt(apT(T, q)) < 20 * U) ok++; return ok / src.length; };
   // 두 변환이 선 가운데에서 얼마나 다른지 (크기 10%·회전 5°·이동 200 m를 각각 1로)
   const change = (T, T0) => {
     const r = cMul(T.a, [T0.a[0], -T0.a[1]]), n0 = T0.a[0] ** 2 + T0.a[1] ** 2, c1 = apT(T, qc), c0 = apT(T0, qc);
     return Math.abs(Math.log(Math.hypot(r[0], r[1]) / n0)) / 0.1 + Math.abs(Math.atan2(r[1], r[0])) / 0.087 + Math.hypot(c1[0] - c0[0], c1[1] - c0[1]) / U / 200;
   };
-  return { cost, costMix, sub, qc, move, refine, inlier, change, U };
+  return { cost, costMix, offRun, sub, qc, move, refine, inlier, change, U };
 }
 const pause = () => new Promise(r => setTimeout(r)); // 오래 계산할 때 화면이 멈추지 않게
 // 코스 선 점 중 차도 20 m 안이면서 등산로에서는 20 m 넘게 떨어진 점의 비율 (등산 코스가 도심에 놓였는지)
@@ -2567,7 +2601,9 @@ async function autoAlign(draft, T0, tap, rad) {
   const r = cMul(fit.T.a, [T0.a[0], -T0.a[1]]), n0 = T0.a[0] ** 2 + T0.a[1] ** 2;
   if (Math.abs(Math.log(Math.hypot(r[0], r[1]) / n0)) > Math.log(1.6) || Math.abs(Math.atan2(r[1], r[0])) > 0.5) return { ...T0, score: 0 };
   if (roadShare(roads, field, fit.T, line.src) > 0.4) return { ...T0, score: 0 }; // 등산 코스가 차도 위에 놓이면 잘못 맞춘 것
-  return { ...fit.T, score: F.inlier(fit.T) };
+  const off = F.offRun(fit.T);
+  if (off > 250) return { ...T0, score: 0, off }; // 코스 중간이 등산로를 250 m 넘게 벗어나면 잘못 맞춘 것
+  return { ...fit.T, score: F.inlier(fit.T), off };
 }
 
 // 위치·크기를 모를 때: 지도 범위(area, LatLngBounds) 안에서 코스 선이 길과 가장 잘 겹치는 자리와 크기를 찾음
@@ -2584,9 +2620,10 @@ async function autoLocate(draft, tap, rad, area, summit) {
   // 코스가 범위 밖으로 조금 나가도 되게 길 자료는 범위의 절반만큼 더 넓게
   const px = Math.min(3000, Math.max(aw, ah, 3000) * 0.5) * U0;
   const bx = [a0.x - px, a0.y - px, a1.x + px, a1.y + px];
-  const [field, roads] = await Promise.all([roadField(...bx), roadField(...bx, 'road')]);
+  // 순위는 전체 등산로 기준, 정상과 이어진 등산로(conn)는 확인용 (실제 기록엔 절 진입로처럼 자료상 끊겨 보이는 구간이 섞여서)
+  const [field, roads, conn] = await Promise.all([roadField(...bx), roadField(...bx, 'road'), summit ? roadField(...bx, 'trail', summit) : null]);
   if (!field) return { err: '이 범위에서 등산로 자료를 받지 못했어요. 인터넷 연결을 확인하거나 산 이름을 확인해 주세요' };
-  const F = fitTools(field, line.src), U = F.U;
+  const F = fitTools(field, line.src), U = F.U, Fc = conn && fitTools(conn, line.src);
   const xsP = line.src.map(q => q[0]), ysP = line.src.map(q => q[1]);
   const extPx = Math.max(Math.max(...xsP) - Math.min(...xsP), Math.max(...ysP) - Math.min(...ysP));
   // 코스 크기(선의 가로·세로 중 긴 쪽) 0.7 km ~ 범위 크기의 1.3배를 10%씩
@@ -2631,7 +2668,11 @@ async function autoLocate(draft, tap, rad, area, summit) {
     if (roadShare(roads, field, f, line.src) > 0.4) continue; // 등산 코스가 차도 위에 많이 놓인 자리(도심)는 버림
     if (sp && Math.min(...line.src.map(q => { const m = apT(f, q); return Math.hypot(m[0] - sp.x, m[1] - sp.y); })) / U > 1000) continue; // 정상 1 km 안을 안 지나면 버림
     if (out.some(o => { const oc = apT(o, F.qc), os = Math.hypot(o.a[0], o.a[1]); return Math.hypot(c[0] - oc[0], c[1] - oc[1]) / U < 200 && Math.abs(Math.log(s / os)) < 0.15; })) continue;
-    out.push({ ...f, score: F.inlier(f) });
+    const off = F.offRun(f);
+    if (off > 250) continue; // 코스 중간이 등산로를 250 m 넘게 벗어나면 버림
+    const linked = Fc ? Fc.inlier(f) : 1;
+    if (linked < 0.7) continue; // 코스의 70% 넘게가 그 산 정상과 이어진 등산로 위가 아니면 다른 산·공원 길에 붙은 것
+    out.push({ ...f, score: F.inlier(f), off, linked });
     if (out.length === 3) break;
   }
   return { fits: out, score: out[0]?.score || 0 };
