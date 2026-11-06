@@ -1,5 +1,5 @@
 // 앱 화면은 오프라인에서도 열리게, 지도 타일은 본 것만 캐시 (대량 다운로드 안 함)
-const SHELL_CACHE = 'shell-v21';
+const SHELL_CACHE = 'shell-v22';
 const TILE_CACHE = 'tiles-v1';
 const SAVED_TILES = 'tiles-saved'; // 계획 탭 "이 코스 지도 저장"으로 받은 지도 (자동으로 지우지 않음)
 const TILE_LIMIT = 3000;

@@ -487,7 +487,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-07a · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-07b · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -2120,12 +2120,9 @@ function startLocate(draft) {
   $('georefMsg').textContent = '산 이름 확인 후 찾기';
   $('georefDone').hidden = true; $('georefManual').hidden = false;
   $('georef').hidden = false; $('mapBanner').hidden = true;
-  // 산 이름: "램블러에서 찾기"로 검색한 이름 → 없으면 지금 지도에서 가장 가까운 산
+  // 산 이름은 비워 둠 (미리 채운 이름이 틀리면 엉뚱한 곳에서 찾아서). 비워 두면 램블러를 열 때(또는 지금) 보던 지도 범위에서 찾음
   $('locSub').hidden = false;
-  let name = '';
-  try { const a = JSON.parse(store.get('locArea') || 'null'); if (a && Date.now() - a.t < 6 * 3600e3) name = a.name || ''; } catch {}
-  $('locPeak').value = name;
-  if (!name) peakNear(map.getCenter(), map.getBounds()).then(n => { if (locate && !$('locPeak').value) $('locPeak').value = n; }).catch(() => {});
+  $('locPeak').value = '';
 }
 function endLocate() { locate = null; $('georefManual').hidden = true; $('georef').hidden = true; $('locSub').hidden = true; }
 $('georefManual').onclick = () => { const d = locate?.draft; endLocate(); if (d) startRough(d); };
