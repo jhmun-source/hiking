@@ -487,7 +487,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-07b · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-07c · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -504,7 +504,7 @@
     <button id="georefManual" hidden>직접 맞추기</button>
     <button id="georefCancel">취소</button>
   </div>
-  <div class="georef-sub" id="locSub" hidden>어느 산 코스예요? <input type="text" id="locPeak" enterkeyhint="search" placeholder="예: 천성산"> <button id="locGo" class="primary">찾기</button> <small>"찾기"를 누르면 그 산 주변에서 사진 속 코스 위치를 찾아요. 엉뚱한 선을 잡으면 사진 속 코스 선을 직접 눌러 주세요.</small></div>
+  <div class="georef-sub" id="locSub" hidden>어느 산 코스예요? <input type="text" id="locPeak" enterkeyhint="search" placeholder="예: 천성산"> <button id="locGo" class="primary">찾기</button> <small>"찾기"를 누르면 그 산 주변에서 사진 속 코스 위치를 찾아요. 코스 선은 자동으로 골라요. 엉뚱한 선을 잡았으면 사진 속 코스 선을 직접 눌러도 찾기가 시작돼요.</small></div>
   <div class="georef-view" id="georefView"><div class="georef-inner" id="georefInner"><img id="georefImg" alt="불러온 지도 사진"></div></div>
 </div>
 <div class="map-banner" id="mapBanner" hidden><span id="mapBannerMsg"></span><button id="mapBannerOk" hidden>다음</button><button id="mapBannerCancel">취소</button></div>
@@ -2117,7 +2117,7 @@ function startLocate(draft) {
   $('georefImg').src = draft.src;
   gZoom = 1; $('georefInner').style.width = '100%';
   drawPins([], draft.w, draft.h);
-  $('georefMsg').textContent = '산 이름 확인 후 찾기';
+  $('georefMsg').textContent = '산 이름을 넣고 찾기';
   $('georefDone').hidden = true; $('georefManual').hidden = false;
   $('georef').hidden = false; $('mapBanner').hidden = true;
   // 산 이름은 비워 둠 (미리 채운 이름이 틀리면 엉뚱한 곳에서 찾아서). 비워 두면 램블러를 열 때(또는 지금) 보던 지도 범위에서 찾음
@@ -2127,8 +2127,13 @@ function startLocate(draft) {
 function endLocate() { locate = null; $('georefManual').hidden = true; $('georef').hidden = true; $('locSub').hidden = true; }
 $('georefManual').onclick = () => { const d = locate?.draft; endLocate(); if (d) startRough(d); };
 // "찾기"(또는 키보드의 검색·Enter): 코스 선을 자동으로 골라서 찾기
+// 산 이름 없이 찾으면 도심 근처 공원 산책로 같은 엉뚱한 곳에 붙을 수 있어서, 이름을 꼭 받음
+function needPeak() {
+  if ($('locPeak').value.trim()) return false;
+  toast('먼저 어느 산 코스인지 산 이름을 넣어 주세요'); $('locPeak').focus(); return true;
+}
 $('locGo').onclick = async () => {
-  if (!locate) return;
+  if (!locate || needPeak()) return;
   const d = locate.draft;
   $('locPeak').blur(); $('georefMsg').textContent = '코스 선을 고르는 중…';
   const tap = await findCourseTap(d).catch(() => null);
@@ -2232,7 +2237,7 @@ $('georefImg').onclick = (e) => {
     extract.taps.push([(e.clientX - r.left) / r.width * photo.w, (e.clientY - r.top) / r.height * photo.h]);
     extractStep(); return;
   }
-  if (locate) { const d = locate.draft; runLocate(d, [(e.clientX - r.left) / r.width * d.w, (e.clientY - r.top) / r.height * d.h], 14 * d.w / r.width); return; }
+  if (locate) { if (needPeak()) return; const d = locate.draft; runLocate(d, [(e.clientX - r.left) / r.width * d.w, (e.clientY - r.top) / r.height * d.h], 14 * d.w / r.width); return; }
   if (!georef) return;
   const p = [(e.clientX - r.left) / r.width * georef.draft.w, (e.clientY - r.top) / r.height * georef.draft.h];
   georef.imgPts.push(p);
@@ -2432,9 +2437,11 @@ async function courseLinePts(draft, tap, rad) {
   return { src };
 }
 // 지도 범위(메르카토르 [x0, y0, x1, y1]) 안의 길(OpenFreeMap z14: 등산로·임도·도로)까지 거리를 약 8 m 칸마다 미리 계산
-const TRAIL_SUB = /^(path|bridleway|footway)$/; // 산길이 보행로(footway)로 적힌 곳도 있어서 포함
-// trailsOnly: 오솔길(path)·임도(track)만. 도시의 촘촘한 도로·인도는 어떤 선이든 대충 맞아서, 위치를 모를 때는 빼고 찾음
-async function roadField(x0, y0, x1, y1, trailsOnly) {
+// 사진으로 가져오는 코스는 모두 등산 코스라서, 맞출 때는 오솔길(path)·임도(track)만 기준으로 씀
+// (도시의 촘촘한 차도·인도(footway)는 어떤 선이든 대충 맞아서 도심 한복판에 붙는 원인이 됨)
+// mode 'road'는 차도만: 찾은 자리가 차도 위인지 확인할 때 씀
+const TRAIL_SUB = /^(path|bridleway)$/;
+async function roadField(x0, y0, x1, y1, mode = 'trail') {
   const nw = proj.unproject(L.point(x0, y1)), se = proj.unproject(L.point(x1, y0)); // 메르카토르 y는 북쪽이 큼
   const [tx0, ty0] = tileXY(nw.lat, nw.lng), [tx1, ty1] = tileXY(se.lat, se.lng);
   if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 160) return null;
@@ -2445,7 +2452,7 @@ async function roadField(x0, y0, x1, y1, trailsOnly) {
   for (const r of await Promise.allSettled(jobs)) {
     if (r.status !== 'fulfilled') continue;
     for (const f of r.value.transportation || []) {
-      if (trailsOnly ? !(f.props.class === 'track' || (f.props.class === 'path' && TRAIL_SUB.test(f.props.subclass || ''))) : !/^(path|track|minor|service|tertiary|secondary|primary)$/.test(f.props.class)) continue;
+      if (mode === 'road' ? !/^(minor|service|tertiary|secondary|primary|trunk)$/.test(f.props.class) : !(f.props.class === 'track' || (f.props.class === 'path' && TRAIL_SUB.test(f.props.subclass || '')))) continue;
       for (const l of f.lines) {
         let prev = null;
         for (const ll of l) {
@@ -2521,6 +2528,13 @@ function fitTools(field, src) {
   return { cost, costMix, sub, qc, move, refine, inlier, change, U };
 }
 const pause = () => new Promise(r => setTimeout(r)); // 오래 계산할 때 화면이 멈추지 않게
+// 코스 선 점 중 차도 20 m 안이면서 등산로에서는 20 m 넘게 떨어진 점의 비율 (등산 코스가 도심에 놓였는지)
+function roadShare(roadF, trailF, T, src) {
+  if (!roadF) return 0;
+  const U = trailF.U; let n = 0;
+  for (const q of src) { const m = apT(T, q); if (roadF.distAt(m) < 20 * U && trailF.distAt(m) > 20 * U) n++; }
+  return n / src.length;
+}
 
 // 대략 맞춘 변환 T0 근처에서 보정
 async function autoAlign(draft, T0, tap, rad) {
@@ -2530,8 +2544,9 @@ async function autoAlign(draft, T0, tap, rad) {
   const corners = [[0, 0], [W, 0], [0, -H], [W, -H]].map(q => apT(T0, q));
   const xs = corners.map(p => p[0]), ys = corners.map(p => p[1]);
   const pad = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 0.35;
-  const field = await roadField(Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad);
-  if (!field) return { err: '사진 범위가 너무 넓거나 주변에 길 자료가 없어요. 지도를 더 확대해서 사진과 맞춰 주세요' };
+  const bx = [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad];
+  const [field, roads] = await Promise.all([roadField(...bx), roadField(...bx, 'road')]);
+  if (!field) return { err: '이 근처에서 등산로 자료를 찾지 못했어요. 지도를 산으로 옮기고 사진과 대략 겹쳐 주세요' };
   const F = fitTools(field, line.src);
   // 1) 넓게 훑기: 이동 ±R(40 m 간격) × 크기 0.72~1.4배 × 회전 ±12°
   const diag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / F.U;
@@ -2551,6 +2566,7 @@ async function autoAlign(draft, T0, tap, rad) {
   const fit = fits.filter(f => f.c <= minC * 1.2 + 0.5).sort((x, y) => F.change(x.T, T0) - F.change(y.T, T0))[0];
   const r = cMul(fit.T.a, [T0.a[0], -T0.a[1]]), n0 = T0.a[0] ** 2 + T0.a[1] ** 2;
   if (Math.abs(Math.log(Math.hypot(r[0], r[1]) / n0)) > Math.log(1.6) || Math.abs(Math.atan2(r[1], r[0])) > 0.5) return { ...T0, score: 0 };
+  if (roadShare(roads, field, fit.T, line.src) > 0.4) return { ...T0, score: 0 }; // 등산 코스가 차도 위에 놓이면 잘못 맞춘 것
   return { ...fit.T, score: F.inlier(fit.T) };
 }
 
@@ -2565,8 +2581,9 @@ async function autoLocate(draft, tap, rad, area) {
   if (Math.hypot(aw, ah) > 30000) return { err: '찾을 범위가 너무 넓어요. 지도를 그 산이 화면에 차도록 확대한 뒤 다시 해 주세요' };
   // 코스가 범위 밖으로 조금 나가도 되게 길 자료는 범위의 절반만큼 더 넓게
   const px = Math.min(3000, Math.max(aw, ah, 3000) * 0.5) * U0;
-  const field = await roadField(a0.x - px, a0.y - px, a1.x + px, a1.y + px, true);
-  if (!field) return { err: '이 범위에서 길 자료를 받지 못했어요. 인터넷 연결을 확인하거나 지도를 조금 확대해 주세요' };
+  const bx = [a0.x - px, a0.y - px, a1.x + px, a1.y + px];
+  const [field, roads] = await Promise.all([roadField(...bx), roadField(...bx, 'road')]);
+  if (!field) return { err: '이 범위에서 등산로 자료를 받지 못했어요. 인터넷 연결을 확인하거나 산 이름을 확인해 주세요' };
   const F = fitTools(field, line.src), U = F.U;
   const xsP = line.src.map(q => q[0]), ysP = line.src.map(q => q[1]);
   const extPx = Math.max(Math.max(...xsP) - Math.min(...xsP), Math.max(...ysP) - Math.min(...ysP));
@@ -2603,6 +2620,7 @@ async function autoLocate(draft, tap, rad, area) {
   for (const f of fits) {
     const c = apT(f, F.qc), s = Math.hypot(f.a[0], f.a[1]), extM = extPx * s / U;
     if (extM < 400 || extM > extMax * 1.3) continue; // 코스가 너무 작거나(0.4 km 미만) 범위보다 훨씬 크면 버림
+    if (roadShare(roads, field, f, line.src) > 0.4) continue; // 등산 코스가 차도 위에 많이 놓인 자리(도심)는 버림
     if (out.some(o => { const oc = apT(o, F.qc), os = Math.hypot(o.a[0], o.a[1]); return Math.hypot(c[0] - oc[0], c[1] - oc[1]) / U < 200 && Math.abs(Math.log(s / os)) < 0.15; })) continue;
     out.push({ ...f, score: F.inlier(f) });
     if (out.length === 3) break;
