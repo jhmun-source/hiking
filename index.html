@@ -185,6 +185,7 @@
   .georef-sub[hidden] { display: none; }
   .georef-sub input { flex: 1; min-width: 120px; width: auto; }
   .georef-sub small { color: var(--muted, #999); width: 100%; }
+  .georef-sub button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; font-weight: 600; }
   .georef-zoom button { width: 40px; padding: 8px 0; }
   .georef-view { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
   .georef-inner { position: relative; display: inline-block; }
@@ -486,7 +487,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-06e · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-07a · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -503,7 +504,7 @@
     <button id="georefManual" hidden>직접 맞추기</button>
     <button id="georefCancel">취소</button>
   </div>
-  <div class="georef-sub" id="locSub" hidden>어느 산 코스예요? <input type="text" id="locPeak" placeholder="예: 천성산"> <small>그 산 주변에서 찾아요</small></div>
+  <div class="georef-sub" id="locSub" hidden>어느 산 코스예요? <input type="text" id="locPeak" enterkeyhint="search" placeholder="예: 천성산"> <button id="locGo" class="primary">찾기</button> <small>"찾기"를 누르면 그 산 주변에서 사진 속 코스 위치를 찾아요. 엉뚱한 선을 잡으면 사진 속 코스 선을 직접 눌러 주세요.</small></div>
   <div class="georef-view" id="georefView"><div class="georef-inner" id="georefInner"><img id="georefImg" alt="불러온 지도 사진"></div></div>
 </div>
 <div class="map-banner" id="mapBanner" hidden><span id="mapBannerMsg"></span><button id="mapBannerOk" hidden>다음</button><button id="mapBannerCancel">취소</button></div>
@@ -2116,7 +2117,7 @@ function startLocate(draft) {
   $('georefImg').src = draft.src;
   gZoom = 1; $('georefInner').style.width = '100%';
   drawPins([], draft.w, draft.h);
-  $('georefMsg').textContent = '산 이름 확인 후 코스 선을 한 번 누르세요';
+  $('georefMsg').textContent = '산 이름 확인 후 찾기';
   $('georefDone').hidden = true; $('georefManual').hidden = false;
   $('georef').hidden = false; $('mapBanner').hidden = true;
   // 산 이름: "램블러에서 찾기"로 검색한 이름 → 없으면 지금 지도에서 가장 가까운 산
@@ -2128,6 +2129,17 @@ function startLocate(draft) {
 }
 function endLocate() { locate = null; $('georefManual').hidden = true; $('georef').hidden = true; $('locSub').hidden = true; }
 $('georefManual').onclick = () => { const d = locate?.draft; endLocate(); if (d) startRough(d); };
+// "찾기"(또는 키보드의 검색·Enter): 코스 선을 자동으로 골라서 찾기
+$('locGo').onclick = async () => {
+  if (!locate) return;
+  const d = locate.draft;
+  $('locPeak').blur(); $('georefMsg').textContent = '코스 선을 고르는 중…';
+  const tap = await findCourseTap(d).catch(() => null);
+  if (!locate) return;
+  if (!tap) { $('georefMsg').textContent = '사진 속 코스 선을 한 번 눌러 주세요'; toast('코스 선을 자동으로 못 골랐어요. 사진 속 코스 선을 직접 눌러 주세요.'); return; }
+  runLocate(d, tap, 20);
+};
+$('locPeak').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); $('locGo').click(); } };
 async function runLocate(draft, tap, rad) {
   const peak = $('locPeak').value.trim();
   endLocate(); setSheet('closed');
@@ -2325,6 +2337,46 @@ $('roughImg').onclick = async (e) => {
 // ---------- 사진 속 코스 선을 지도 길에 맞추기 (대략 맞춘 뒤 보정 · 범위 안에서 자동으로 찾기) ----------
 // 사진 픽셀 q = [x, -y] → 지도(메르카토르) m = a·q + b (복소수 곱: 확대·회전, b: 이동)
 const apT = (T, q) => { const m = cMul(T.a, q); return [m[0] + T.b[0], m[1] + T.b[1]]; };
+// 코스 선을 누르지 않았을 때: 사진에서 코스 선일 만한 곳을 자동으로 고름
+// 진한 색(채도 90 이상)을 색깔별로 묶어, 색마다 가장 큰 "가는 선" 덩어리의 크기 × 진하기가 가장 큰 곳
+// (깃발·버튼은 두꺼워서, 지도의 등산로·도로 선은 덜 진해서 밀림). 그 선 위의 한 점 [x, y]를 돌려줌
+async function findCourseTap(draft) {
+  const { w: W, h: H } = draft;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(await loadImage(draft.src), 0, 0, W, H);
+  const px = ctx.getImageData(0, 0, W, H).data;
+  const S = 3, gw = Math.ceil(W / S), gh = Math.ceil(H / S), at = (gx, gy) => (Math.min(H - 1, gy * S + 1) * W + Math.min(W - 1, gx * S + 1)) * 4;
+  const bins = new Map();
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+    const i = at(gx, gy), r = px[i], g = px[i + 1], b = px[i + 2], sat = Math.max(r, g, b) - Math.min(r, g, b);
+    if (sat < 90 || Math.max(r, g, b) < 110) continue;
+    const k = (r >> 5) << 6 | (g >> 5) << 3 | (b >> 5), e = bins.get(k) || { n: 0, r: 0, g: 0, b: 0, s: 0 };
+    e.n++; e.r += r; e.g += g; e.b += b; e.s += sat; bins.set(k, e);
+  }
+  let best = null;
+  for (const e of [...bins.values()].filter(e => e.n >= 40).sort((a, b) => b.n - a.n).slice(0, 8)) {
+    const rgb = [e.r / e.n, e.g / e.n, e.b / e.n], sat = e.s / e.n, mask = new Uint8Array(gw * gh), lab = new Int32Array(gw * gh).fill(-1);
+    for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) { const i = at(gx, gy); if ((px[i] - rgb[0]) ** 2 + (px[i + 1] - rgb[1]) ** 2 + (px[i + 2] - rgb[2]) ** 2 < 55 ** 2) mask[gy * gw + gx] = 1; }
+    for (let s = 0; s < gw * gh; s++) {
+      if (!mask[s] || lab[s] >= 0) continue;
+      const cells = [s]; lab[s] = s; let x0 = gw, y0 = gh, x1 = 0, y1 = 0;
+      for (let k = 0; k < cells.length; k++) {
+        const v = cells[k], vx = v % gw, vy = (v - vx) / gw;
+        x0 = Math.min(x0, vx); x1 = Math.max(x1, vx); y0 = Math.min(y0, vy); y1 = Math.max(y1, vy);
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+          const X = vx + dx, Y = vy + dy; if (X < 0 || Y < 0 || X >= gw || Y >= gh) continue;
+          const u = Y * gw + X; if (mask[u] && lab[u] < 0) { lab[u] = s; cells.push(u); }
+        }
+      }
+      const diag = Math.hypot(x1 - x0, y1 - y0);
+      if (cells.length < 30 || cells.length / Math.max(1, diag) > 4) continue; // 작거나 두꺼운 덩어리(깃발·버튼·글자)는 아님
+      const score = diag * sat;
+      if (!best || score > best.score) { const v = cells[Math.floor(cells.length / 2)], vx = v % gw; best = { score, tap: [vx * S + 1, (v - vx) / gw * S + 1] }; }
+    }
+  }
+  return best?.tap || null;
+}
 // 누른 곳의 선 색과 같은 색 픽셀(3 px 간격)을 모으되, 그 선과 이어진 큰 덩어리만 남김
 // (램블러 화면의 버튼·마커·글씨처럼 같은 색인 작은 것들은 빠짐)
 async function courseLinePts(draft, tap, rad) {
