@@ -181,6 +181,10 @@
   .georef-bar span:first-child { flex: 1; font-weight: 600; }
   .georef-bar button, .map-banner button { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
   .georef-zoom { display: flex; gap: 4px; }
+  .georef-sub { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel); border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .georef-sub[hidden] { display: none; }
+  .georef-sub input { flex: 1; min-width: 120px; width: auto; }
+  .georef-sub small { color: var(--muted, #999); width: 100%; }
   .georef-zoom button { width: 40px; padding: 8px 0; }
   .georef-view { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
   .georef-inner { position: relative; display: inline-block; }
@@ -482,7 +486,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-06d · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-06e · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -499,6 +503,7 @@
     <button id="georefManual" hidden>직접 맞추기</button>
     <button id="georefCancel">취소</button>
   </div>
+  <div class="georef-sub" id="locSub" hidden>어느 산 코스예요? <input type="text" id="locPeak" placeholder="예: 천성산"> <small>그 산 주변에서 찾아요</small></div>
   <div class="georef-view" id="georefView"><div class="georef-inner" id="georefInner"><img id="georefImg" alt="불러온 지도 사진"></div></div>
 </div>
 <div class="map-banner" id="mapBanner" hidden><span id="mapBannerMsg"></span><button id="mapBannerOk" hidden>다음</button><button id="mapBannerCancel">취소</button></div>
@@ -1429,20 +1434,7 @@ $('searchForm').addEventListener('submit', async (e) => {
   // 브이월드(키 있을 때)와 OSM을 같이 검색해서, 산·봉우리 → 공원 → 이름이 같은 곳 → 나머지 순 (같으면 가까운 순)
   const [vw, osm, famous] = await Promise.all([searchVworld(q).catch(() => []), searchNominatim(q).catch(() => null), searchFamous(q)]);
   ul.innerHTML = '';
-  const seen = [];
-  const c = map.getCenter();
-  const qn = q.replace(/\s/g, '');
-  const score = (r) => {
-    const n = r.name.replace(/\s|\(.*?\)/g, '');
-    if (r.kind === 'famous') return 300 + (r.exact ? 50 : 0);
-    if (r.kind === 'trail') return 290 + (n === qn ? 70 : 0); // "지리산둘레길"로 찾으면 둘레길이 맨 위
-    return (r.kind === 'peak' ? 100 : r.kind === 'park' ? 60 : 0) + (n === qn ? 50 : n.startsWith(qn) ? 20 : 0);
-  };
-  const list = [...famous, ...vw, ...(osm || [])].filter(r => {
-    if (seen.some(s => haversine(s.lat, s.lng, r.lat, r.lng) < 30 && s.name === r.name)) return false;
-    seen.push(r); return true;
-  }).sort((a, b) => score(b) - score(a) || haversine(c.lat, c.lng, a.lat, a.lng) - haversine(c.lat, c.lng, b.lat, b.lng))
-    .slice(0, 10);
+  const list = rankPlaces(q, [...famous, ...vw, ...(osm || [])]).slice(0, 10);
   if (!list.length) {
     ul.innerHTML = osm === null && !vw.length ? '<li>검색에 실패했어요. 인터넷 연결을 확인하세요.</li>' : '<li>결과가 없어요. 짧게 검색하거나 지도에서 직접 찍어 주세요.</li>';
     setTimeout(() => ul.innerHTML = '', 3000); return;
@@ -1458,6 +1450,31 @@ $('searchForm').addEventListener('submit', async (e) => {
   });
 });
 
+// 검색 결과 순서: 100대 명산 → 둘레길 → 산·봉우리 → 공원 → 이름이 같은 곳 → 나머지 (같으면 지도 가운데에서 가까운 순)
+function rankPlaces(q, all) {
+  const seen = [], c = map.getCenter(), qn = q.replace(/\s/g, '');
+  const score = (r) => {
+    const n = r.name.replace(/\s|\(.*?\)/g, '');
+    if (r.kind === 'famous') return 300 + (r.exact ? 50 : 0);
+    if (r.kind === 'trail') return 290 + (n === qn ? 70 : 0); // "지리산둘레길"로 찾으면 둘레길이 맨 위
+    return (r.kind === 'peak' ? 100 : r.kind === 'park' ? 60 : 0) + (n === qn ? 50 : n.startsWith(qn) ? 20 : 0);
+  };
+  return all.filter(r => {
+    if (!isFinite(r.lat) || !isFinite(r.lng) || seen.some(s => haversine(s.lat, s.lng, r.lat, r.lng) < 30 && s.name === r.name)) return false;
+    seen.push(r); return true;
+  }).sort((a, b) => score(b) - score(a) || haversine(c.lat, c.lng, a.lat, a.lng) - haversine(c.lat, c.lng, b.lat, b.lng));
+}
+// 산 이름 → 그럴듯한 위치 몇 곳 (검색 순서대로, 서로 3 km 넘게 떨어진 곳만, 둘레길처럼 긴 길은 빼고)
+// 같은 이름의 산이 여러 곳이거나 자료마다 위치가 다를 수 있어서 (예: 100대 명산 자료의 천성산은 토곡산 쪽에 있음) 하나만 믿지 않음
+async function placesOf(q, n = 3) {
+  const [vw, osm, famous] = await Promise.all([searchVworld(q).catch(() => []), searchNominatim(q).catch(() => []), searchFamous(q).catch(() => [])]);
+  const out = [];
+  for (const r of rankPlaces(q, [...famous, ...vw, ...(osm || [])])) {
+    if (r.kind === 'trail' || out.some(o => haversine(o.lat, o.lng, r.lat, r.lng) < 3000)) continue;
+    out.push(r); if (out.length === n) break;
+  }
+  return out;
+}
 // 100대 명산 이름과 맞으면 그 산의 정상을 맨 위에 (예: 지리산 → 천왕봉). OSM의 "지리산"은 통영 사량도 지리산이라서
 async function searchFamous(q) {
   const qn = q.replace(/\s/g, '');
@@ -2050,6 +2067,7 @@ $('ramblrBtn').onclick = async () => {
   if (!phone) { window.open(`https://www.ramblr.com/web/explore#h=1&text_srch=&sort=1&unit=2&zoom=${Math.round(map.getZoom())}&center=${c.lat.toFixed(4)},${c.lng.toFixed(4)}&page=1&mode=0`, '_blank', 'noopener'); return; }
   const w = window.open('about:blank', '_blank'); // 누른 순간에 열어 둬야 팝업 차단에 안 걸림
   const name = await peakNear(c, b).catch(() => '');
+  if (name) store.set('locArea', JSON.stringify({ t: Date.now(), b: [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()], name }));
   const url = 'https://m.ramblr.com/mobile/explore' + (name ? `#pg=explore&pgs1=search&text_sarch=${encodeURIComponent(name)}` : '');
   if (w) { w.opener = null; w.location.href = url; } else location.href = url;
 };
@@ -2098,21 +2116,49 @@ function startLocate(draft) {
   $('georefImg').src = draft.src;
   gZoom = 1; $('georefInner').style.width = '100%';
   drawPins([], draft.w, draft.h);
-  $('georefMsg').textContent = '코스 선을 한 번 누르세요';
+  $('georefMsg').textContent = '산 이름 확인 후 코스 선을 한 번 누르세요';
   $('georefDone').hidden = true; $('georefManual').hidden = false;
   $('georef').hidden = false; $('mapBanner').hidden = true;
+  // 산 이름: "램블러에서 찾기"로 검색한 이름 → 없으면 지금 지도에서 가장 가까운 산
+  $('locSub').hidden = false;
+  let name = '';
+  try { const a = JSON.parse(store.get('locArea') || 'null'); if (a && Date.now() - a.t < 6 * 3600e3) name = a.name || ''; } catch {}
+  $('locPeak').value = name;
+  if (!name) peakNear(map.getCenter(), map.getBounds()).then(n => { if (locate && !$('locPeak').value) $('locPeak').value = n; }).catch(() => {});
 }
-function endLocate() { locate = null; $('georefManual').hidden = true; $('georef').hidden = true; }
+function endLocate() { locate = null; $('georefManual').hidden = true; $('georef').hidden = true; $('locSub').hidden = true; }
 $('georefManual').onclick = () => { const d = locate?.draft; endLocate(); if (d) startRough(d); };
 async function runLocate(draft, tap, rad) {
+  const peak = $('locPeak').value.trim();
   endLocate(); setSheet('closed');
   const job = ++locJob;
-  $('mapBannerMsg').textContent = '사진 속 코스가 어디인지 찾는 중… (몇 초 걸려요)';
+  $('mapBannerMsg').textContent = peak ? `${peak} 주변에서 사진 속 코스를 찾는 중… (몇 초 걸려요)` : '사진 속 코스가 어디인지 찾는 중… (몇 초 걸려요)';
   $('mapBannerOk').hidden = true; $('mapBanner').hidden = false;
+  // 산 이름이 있으면 그 산 정상 둘레 가로세로 약 14 km 안에서, 없으면 램블러를 열 때(또는 지금) 보던 지도 범위에서
+  // 산 이름이 있으면 검색된 곳(최대 3곳)마다 정상 둘레 가로세로 약 12 km 안에서, 없으면 램블러를 열 때(또는 지금) 보던 지도 범위에서
+  let places = [], place = null;
+  if (peak) {
+    places = await placesOf(peak).catch(() => []);
+    if (!places.length && job === locJob) toast(`"${peak}"을(를) 찾지 못해서 지도에 보이는 범위에서 찾아요`);
+  }
+  const box = (p) => { const dLat = 6 / 110.574, dLng = 6 / (111.32 * Math.cos(p.lat * Math.PI / 180)); return L.latLngBounds([p.lat - dLat, p.lng - dLng], [p.lat + dLat, p.lng + dLng]); };
   let res = null;
-  try { res = await autoLocate(draft, tap, rad, searchArea()); } catch (err) { console.warn(err); }
+  try {
+    const runs = [];
+    for (const [i, p] of (places.length ? places : [null]).entries()) {
+      if (places.length > 1) $('mapBannerMsg').textContent = `${peak} 주변에서 사진 속 코스를 찾는 중… (${i + 1}/${places.length}, 몇 초씩 걸려요)`;
+      const r = await autoLocate(draft, tap, rad, p ? box(p) : searchArea());
+      if (job !== locJob) return;
+      runs.push({ r, p });
+    }
+    // 여러 곳에서 찾았으면 점수 좋은 순으로 합쳐서 (서로 다른 후보 3개까지)
+    const all = runs.flatMap(x => (x.r.fits || []).map(f => ({ ...f, p: x.p }))).sort((a, b) => a.cp - b.cp);
+    place = all[0]?.p || places[0] || null;
+    res = all.length ? { fits: all.slice(0, 3) } : runs.find(x => x.r.err)?.r || null;
+  } catch (err) { console.warn(err); }
   if (job !== locJob) return; // 취소함
   $('mapBanner').hidden = true;
+  if (place && !(res?.fits || []).some(f => f.score >= 0.6)) map.setView([place.lat, place.lng], 14); // 직접 맞출 때 적어도 그 산이 보이게
   const good = (res?.fits || []).filter(f => f.score >= 0.6);
   if (good.length) {
     store.set('locArea', '');
@@ -2342,7 +2388,7 @@ const TRAIL_SUB = /^(path|bridleway|footway)$/; // 산길이 보행로(footway)�
 async function roadField(x0, y0, x1, y1, trailsOnly) {
   const nw = proj.unproject(L.point(x0, y1)), se = proj.unproject(L.point(x1, y0)); // 메르카토르 y는 북쪽이 큼
   const [tx0, ty0] = tileXY(nw.lat, nw.lng), [tx1, ty1] = tileXY(se.lat, se.lng);
-  if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 120) return null;
+  if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 160) return null;
   const U = 1 / Math.cos(((nw.lat + se.lat) / 2) * Math.PI / 180); // 메르카토르 단위 / 실제 m
   const jobs = [];
   for (let x = tx0; x <= tx1; x++) for (let y = ty0; y <= ty1; y++) jobs.push(ofmTile(x, y));
@@ -2406,6 +2452,7 @@ function fitTools(field, src) {
       let moved = false;
       for (let k = 0; k < 4; k++) for (const sg of [1, -1]) {
         const q = p.slice(); q[k] += sg * st[k];
+        if (Math.abs(q[2]) > 0.4) continue; // 다듬다가 크기가 1.5배 넘게 바뀌면 다른 자리로 새는 것
         const cq = cost(move(T0, q), pts, cap);
         if (cq < c) { c = cq; p = q; moved = true; }
       }
@@ -2505,12 +2552,13 @@ async function autoLocate(draft, tap, rad, area) {
   fits.sort((x, y) => x.cp - y.cp);
   const out = [];
   for (const f of fits) {
-    const c = apT(f, F.qc), s = Math.hypot(f.a[0], f.a[1]);
+    const c = apT(f, F.qc), s = Math.hypot(f.a[0], f.a[1]), extM = extPx * s / U;
+    if (extM < 400 || extM > extMax * 1.3) continue; // 코스가 너무 작거나(0.4 km 미만) 범위보다 훨씬 크면 버림
     if (out.some(o => { const oc = apT(o, F.qc), os = Math.hypot(o.a[0], o.a[1]); return Math.hypot(c[0] - oc[0], c[1] - oc[1]) / U < 200 && Math.abs(Math.log(s / os)) < 0.15; })) continue;
     out.push({ ...f, score: F.inlier(f) });
     if (out.length === 3) break;
   }
-  return { fits: out, score: out[0].score };
+  return { fits: out, score: out[0]?.score || 0 };
 }
 $('georefCancel').onclick = () => { if (extract) endExtract(); else if (locate) endLocate(); else endGeoref(); };
 $('mapBannerCancel').onclick = () => {
