@@ -190,6 +190,8 @@
   .map-banner { position: fixed; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 10px); z-index: 2500; background: var(--accent); color: #fff;
                 border-radius: 12px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; box-shadow: var(--shadow); font-weight: 600; }
   .map-banner span { flex: 1; }
+  .rough-img { position: fixed; z-index: 1500; pointer-events: none; outline: 2px dashed var(--accent); max-width: none; }
+  .rough-img[hidden] { display: none; }
   .photo-img { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; max-width: none; }
   .leaflet-bottom { bottom: 96px; }
 
@@ -446,7 +448,7 @@
           <button class="btn" id="photoDrop">사진 지우기</button>
         </div>
       </div>
-      <p class="hint">안내판 사진이나 코스 지도 캡처를 지도에 겹쳐요. 사진과 지도에서 같은 곳(봉우리, 갈림길 등)을 두 번씩 찍으면 위치가 맞춰져요. 서로 멀리 떨어진 두 곳을 고를수록 정확해요.</p>
+      <p class="hint">블로그·다른 앱의 코스 지도 캡처나 안내판 사진을 지도에 겹쳐요. 사진이 화면에 반투명하게 뜨면 지도를 움직여 대략 겹치게 하고, 사진 속 코스 선을 한 번 누르면 그 선이 등산로에 겹치도록 자동으로 맞춰요. 자동으로 잘 안 맞으면 <a href="#" id="preciseLink">기준점 2개로 정확히 맞추기</a>(사진과 지도에서 같은 곳을 두 번씩 찍기).</p>
       <p class="hint">자동 따라 그리기: 사진에서 코스 선의 시작 → (중간) → 끝을 순서대로 누르면, 그 선을 따라 지점을 찍고 등산로에 맞춰 이어요. 선 색이 바뀌는 곳, 갈림길, 왕복 코스의 반환점은 중간 지점으로 눌러 주세요.</p>
     </div>
 
@@ -471,7 +473,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-05c · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-06a · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -489,7 +491,8 @@
   </div>
   <div class="georef-view" id="georefView"><div class="georef-inner" id="georefInner"><img id="georefImg" alt="불러온 지도 사진"></div></div>
 </div>
-<div class="map-banner" id="mapBanner" hidden><span id="mapBannerMsg"></span><button id="mapBannerCancel">취소</button></div>
+<div class="map-banner" id="mapBanner" hidden><span id="mapBannerMsg"></span><button id="mapBannerOk" hidden>다음</button><button id="mapBannerCancel">취소</button></div>
+<img id="roughImg" class="rough-img" alt="맞추는 중인 지도 사진" hidden>
 
 <div class="toast" id="toast"></div>
 
@@ -1524,6 +1527,7 @@ map.on('movestart', () => { if ($('results').children.length) $('results').inner
 
 // ---------- map controls ----------
 map.on('click', (e) => {
+  if (rough) return;
   if (georef) { if (!$('mapBanner').hidden) georefMapClick(e.latlng); return; }
   if (editing) addWaypoint(e.latlng.lat, e.latlng.lng);
 });
@@ -2021,7 +2025,7 @@ $('photoFile').onchange = (e) => {
     c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
     URL.revokeObjectURL(img.src);
-    startGeoref({ src: c.toDataURL('image/jpeg', 0.85), w: c.width, h: c.height, opacity: 0.6 });
+    startRough({ src: c.toDataURL('image/jpeg', 0.85), w: c.width, h: c.height, opacity: 0.6 });
   };
   img.onerror = () => toast('사진을 열지 못했어요');
   img.src = URL.createObjectURL(f);
@@ -2056,6 +2060,7 @@ function georefMapStep() {
   $('georef').hidden = true;
   setSheet('closed'); // 폰에서 지도를 가리지 않게
   $('mapBannerMsg').textContent = `지도에서 사진의 ${georef.mapPts.length + 1}번 지점과 같은 곳을 누르세요`;
+  $('mapBannerOk').hidden = true;
   $('mapBanner').hidden = false;
 }
 function endGeoref() { georef = null; $('georef').hidden = true; $('mapBanner').hidden = true; }
@@ -2084,14 +2089,213 @@ function georefMapClick(latlng) {
   endGeoref(); showPhoto(); savePhoto();
   toast('사진을 지도에 겹쳤어요. 투명도는 저장·불러오기 탭에서 바꿀 수 있어요.');
 }
+// ---------- 대략 맞추기 + 자동 보정 ----------
+// 1) 사진을 화면 위에 반투명하게 고정해 두고, 그 아래 지도를 움직이고 확대·축소해서 대략 겹치게
+// 2) 사진 속 코스 선을 한 번 누르면, 그 색 선이 주변 길(OpenStreetMap 등산로·도로)과 가장 많이 겹치도록
+//    위치·크기·방향을 자동으로 조금씩 고침. 잘 안 맞으면 대략 맞춘 위치 그대로 둠
+let rough = null; // { draft, step: 'move' | 'tap', T }
+const cMul = (a, b) => [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+// 사진 두 점 q(사진 픽셀, y 뒤집음) → 지도 두 점 m(메르카토르)으로 가는 변환 (확대·회전·이동)
+function simFrom(q1, q2, m1, m2) {
+  const dq = [q2[0] - q1[0], q2[1] - q1[1]], dm = [m2[0] - m1[0], m2[1] - m1[1]];
+  const den = dq[0] ** 2 + dq[1] ** 2;
+  if (den < 1 || dm[0] ** 2 + dm[1] ** 2 < 1) return null;
+  const a = [(dm[0] * dq[0] + dm[1] * dq[1]) / den, (dm[1] * dq[0] - dm[0] * dq[1]) / den];
+  const b = [m1[0] - (a[0] * q1[0] - a[1] * q1[1]), m1[1] - (a[1] * q1[0] + a[0] * q1[1])];
+  return { a, b };
+}
+function startRough(draft) {
+  endGeoref(); if (extract) endExtract();
+  rough = { draft, step: 'move' };
+  if (photoEl) photoEl.hidden = true;
+  setSheet('closed');
+  map.options.zoomSnap = 0.25; // 사진 크기에 맞추기 쉽게 확대 단계를 잘게
+  const img = $('roughImg');
+  img.src = draft.src; img.hidden = false; img.style.pointerEvents = 'none';
+  // 패널·버튼에 가리지 않는 곳에 85% 크기로
+  const wide = window.innerWidth >= 900, r = map.getContainer().getBoundingClientRect(); // 넓은 화면은 지도가 패널 오른쪽에 따로 있음
+  const L0 = r.left + 12, T0 = r.top + 70, R0 = r.right - 56, B0 = r.bottom - (wide ? 16 : 110);
+  const k = Math.min((R0 - L0) / draft.w, (B0 - T0) / draft.h) * 0.9;
+  Object.assign(img.style, { width: draft.w * k + 'px', height: draft.h * k + 'px', left: (L0 + R0 - draft.w * k) / 2 + 'px', top: (T0 + B0 - draft.h * k) / 2 + 'px', opacity: 0.55 });
+  $('mapBannerMsg').textContent = '지도를 움직이고 확대·축소해서 사진과 대략 겹치게 한 뒤 다음을 누르세요';
+  $('mapBannerOk').textContent = '다음'; $('mapBannerOk').hidden = false;
+  $('mapBanner').hidden = false;
+}
+// 화면에 고정된 사진 → 지금 지도에서의 변환
+function roughTransform() {
+  const img = $('roughImg'), ir = img.getBoundingClientRect(), mr = map.getContainer().getBoundingClientRect();
+  const { w, h } = rough.draft, s = ir.width / w;
+  const at = (px, py) => { const p = proj.project(map.containerPointToLatLng([ir.left - mr.left + px * s, ir.top - mr.top + py * s])); return [p.x, p.y]; };
+  return simFrom([0, 0], [w, -h], at(0, 0), at(w, h));
+}
+function endRough() {
+  rough = null; map.options.zoomSnap = 1;
+  $('roughImg').hidden = true; $('roughImg').removeAttribute('src');
+  $('mapBanner').hidden = true; $('mapBannerOk').hidden = true;
+  if (photoEl) photoEl.hidden = !!photo?.hidden;
+}
+function finishRough(T, msg) {
+  photo = { ...rough.draft, a: T.a, b: T.b, hidden: false };
+  endRough(); showPhoto(); savePhoto();
+  toast(msg);
+}
+$('mapBannerOk').onclick = () => {
+  if (!rough) return;
+  if (rough.step === 'move') {
+    rough.T = roughTransform();
+    if (!rough.T) return;
+    rough.step = 'tap';
+    $('roughImg').style.pointerEvents = 'auto'; $('roughImg').style.opacity = 0.75;
+    $('mapBannerMsg').textContent = '사진 속 코스 선을 한 번 누르세요. 그 선이 등산로에 겹치도록 자동으로 맞춰요';
+    $('mapBannerOk').textContent = '건너뛰기';
+  } else finishRough(rough.T, '대략 맞춘 위치로 겹쳤어요. 투명도는 저장 탭에서 바꿀 수 있어요.');
+};
+$('roughImg').onclick = async (e) => {
+  if (!rough || rough.step !== 'tap' || rough.busy) return;
+  const ir = e.target.getBoundingClientRect(), s = ir.width / rough.draft.w;
+  const tap = [(e.clientX - ir.left) / s, (e.clientY - ir.top) / s];
+  rough.busy = true; $('mapBannerMsg').textContent = '등산로에 맞추는 중…';
+  let res = null;
+  try { res = await autoAlign(rough.draft, rough.T, tap, 14 / s); } catch (err) { console.warn(err); }
+  if (!rough) return;
+  rough.busy = false;
+  if (res?.err) { toast(res.err); $('mapBannerMsg').textContent = '사진 속 코스 선을 한 번 누르세요 (선 위를 정확히)'; return; }
+  if (!res || res.score < 0.35) finishRough(rough.T, '자동으로 맞추지 못해서 대략 맞춘 위치로 겹쳤어요. 많이 어긋나면 "위치 다시 맞추기"를 해 주세요.');
+  else finishRough(res, `등산로에 맞춰 겹쳤어요 (사진 속 선의 ${Math.round(res.score * 100)}%가 지도 길과 겹쳐요).`);
+};
+
+// 사진의 코스 선 점들을 주변 길에 가장 잘 겹치게 하는 변환 찾기
+// 길까지 거리 지도를 만들고 → 넓게 훑어보기(이동·크기·회전 조합) → 좋은 후보를 조금씩 움직여 다듬기
+async function autoAlign(draft, T0, tap, rad) {
+  const { w: W, h: H } = draft;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(await loadImage(draft.src), 0, 0, W, H);
+  const px = ctx.getImageData(0, 0, W, H).data;
+  // 누른 곳 주변에서 가장 채도 높은 색 = 코스 선 색
+  let rgb = null, best = -1;
+  for (let y = Math.max(0, Math.round(tap[1] - rad)); y <= Math.min(H - 1, Math.round(tap[1] + rad)); y++)
+    for (let x = Math.max(0, Math.round(tap[0] - rad)); x <= Math.min(W - 1, Math.round(tap[0] + rad)); x++) {
+      const i = (y * W + x) * 4, sat = Math.max(px[i], px[i + 1], px[i + 2]) - Math.min(px[i], px[i + 1], px[i + 2]);
+      if (sat > best) { best = sat; rgb = [px[i], px[i + 1], px[i + 2]]; }
+    }
+  if (!rgb || best < 40) return { err: '색이 있는 코스 선 위를 눌러 주세요 (회색·검은 선은 자동으로 못 맞춰요)' };
+  let src = [];
+  for (let y = 1; y < H; y += 3) for (let x = 1; x < W; x += 3) {
+    const i = (y * W + x) * 4;
+    if ((px[i] - rgb[0]) ** 2 + (px[i + 1] - rgb[1]) ** 2 + (px[i + 2] - rgb[2]) ** 2 < 65 ** 2) src.push([x, -y]);
+  }
+  if (src.length < 30) return { err: '그 색의 선을 찾지 못했어요. 코스 선 위를 다시 눌러 주세요' };
+  if (src.length > 2500) { const st = src.length / 2500; src = Array.from({ length: 2500 }, (_, i) => src[Math.floor(i * st)]); }
+
+  // 사진이 덮는 곳(+30%)의 길: OpenFreeMap z14 타일의 등산로·임도·도로를 약 10 m 간격 점으로
+  const ap = (T, q) => { const m = cMul(T.a, q); return [m[0] + T.b[0], m[1] + T.b[1]]; };
+  const corners = [[0, 0], [W, 0], [0, -H], [W, -H]].map(q => ap(T0, q));
+  const xs = corners.map(p => p[0]), ys = corners.map(p => p[1]);
+  const pad = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 0.3;
+  const nw = proj.unproject(L.point(Math.min(...xs) - pad, Math.max(...ys) + pad)), se = proj.unproject(L.point(Math.max(...xs) + pad, Math.min(...ys) - pad)); // 메르카토르 y는 북쪽이 큼
+  const [tx0, ty0] = tileXY(nw.lat, nw.lng), [tx1, ty1] = tileXY(se.lat, se.lng);
+  if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 64) return { err: '사진 범위가 너무 넓어요. 지도를 더 확대해서 사진과 맞춰 주세요' };
+  const U = 1 / Math.cos(((nw.lat + se.lat) / 2) * Math.PI / 180); // 메르카토르 단위 / 실제 m
+  const jobs = [];
+  for (let x = tx0; x <= tx1; x++) for (let y = ty0; y <= ty1; y++) jobs.push(ofmTile(x, y));
+  const tgt = [];
+  for (const r of await Promise.allSettled(jobs)) {
+    if (r.status !== 'fulfilled') continue;
+    for (const f of r.value.transportation || []) {
+      if (!/^(path|track|minor|service|tertiary|secondary|primary)$/.test(f.props.class)) continue;
+      for (const l of f.lines) {
+        let prev = null;
+        for (const ll of l) {
+          const p = proj.project(L.latLng(ll[0], ll[1])), q = [p.x, p.y];
+          if (prev) { const d = Math.hypot(q[0] - prev[0], q[1] - prev[1]), n = Math.ceil(d / (10 * U)); for (let j = 1; j < n; j++) tgt.push([prev[0] + (q[0] - prev[0]) * j / n, prev[1] + (q[1] - prev[1]) * j / n]); }
+          tgt.push(q); prev = q;
+        }
+      }
+    }
+  }
+  if (tgt.length < 50) return null;
+  // 길까지의 거리 지도(거리 변환): 약 8 m 칸마다 가장 가까운 길까지 거리 → 어떤 점이든 바로 거리를 앎
+  let gx0 = Infinity, gy0 = Infinity, gx1 = -Infinity, gy1 = -Infinity;
+  for (const p of tgt) { gx0 = Math.min(gx0, p[0]); gy0 = Math.min(gy0, p[1]); gx1 = Math.max(gx1, p[0]); gy1 = Math.max(gy1, p[1]); }
+  let CS = 8 * U;
+  while (((gx1 - gx0) / CS + 1) * ((gy1 - gy0) / CS + 1) > 3e6) CS *= 1.25;
+  const GW = Math.ceil((gx1 - gx0) / CS) + 1, GH = Math.ceil((gy1 - gy0) / CS) + 1;
+  const dt = new Float32Array(GW * GH).fill(1e9);
+  for (const p of tgt) dt[Math.round((p[1] - gy0) / CS) * GW + Math.round((p[0] - gx0) / CS)] = 0;
+  const D1 = CS, D2 = CS * Math.SQRT2;
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+    const i = y * GW + x; let v = dt[i];
+    if (x) v = Math.min(v, dt[i - 1] + D1);
+    if (y) { v = Math.min(v, dt[i - GW] + D1); if (x) v = Math.min(v, dt[i - GW - 1] + D2); if (x < GW - 1) v = Math.min(v, dt[i - GW + 1] + D2); }
+    dt[i] = v;
+  }
+  for (let y = GH - 1; y >= 0; y--) for (let x = GW - 1; x >= 0; x--) {
+    const i = y * GW + x; let v = dt[i];
+    if (x < GW - 1) v = Math.min(v, dt[i + 1] + D1);
+    if (y < GH - 1) { v = Math.min(v, dt[i + GW] + D1); if (x < GW - 1) v = Math.min(v, dt[i + GW + 1] + D2); if (x) v = Math.min(v, dt[i + GW - 1] + D2); }
+    dt[i] = v;
+  }
+  const distAt = (m) => {
+    const x = Math.round((m[0] - gx0) / CS), y = Math.round((m[1] - gy0) / CS);
+    return x < 0 || y < 0 || x >= GW || y >= GH ? 1e9 : dt[y * GW + x];
+  };
+  // 점수(낮을수록 좋음): 선 점마다 가장 가까운 길까지 거리 평균 (cap m 넘으면 cap으로)
+  const cost = (T, pts, cap) => { let s = 0; const c = cap * U; for (const q of pts) { const m = cMul(T.a, q); s += Math.min(distAt([m[0] + T.b[0], m[1] + T.b[1]]), c); } return s / pts.length / U; };
+  const sub = (n) => src.length > n ? Array.from({ length: n }, (_, i) => src[Math.floor(i * src.length / n)]) : src;
+  // 변환 = 대략 맞춘 것(T0)을 사진 가운데 기준으로 e^ls배, th도 돌리고 (dx, dy) m 옮긴 것
+  const ctr = ap(T0, [W / 2, -H / 2]);
+  const make = ([dx, dy, ls, th]) => {
+    const z = [Math.exp(ls) * Math.cos(th), Math.exp(ls) * Math.sin(th)], bb = cMul(z, [T0.b[0] - ctr[0], T0.b[1] - ctr[1]]);
+    return { a: cMul(z, T0.a), b: [ctr[0] + bb[0] + dx * U, ctr[1] + bb[1] + dy * U] };
+  };
+  // 1) 넓게 훑기: 이동 ±R(40 m 간격) × 크기 0.72~1.4배 × 회전 ±12°, 점 200개, 80 m에서 자름
+  const diag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / U;
+  const R = Math.min(1000, Math.max(150, diag * 0.2));
+  const few = sub(200), cands = [];
+  for (let ls = Math.log(0.72); ls <= Math.log(1.41); ls += Math.log(1.08)) for (let deg = -12; deg <= 12; deg += 6) {
+    for (let dx = -R; dx <= R; dx += 40) for (let dy = -R; dy <= R; dy += 40) {
+      const p = [dx, dy, ls, deg * Math.PI / 180], c = cost(make(p), few, 80);
+      if (cands.length < 8 || c < cands[cands.length - 1].c) { cands.push({ p, c }); cands.sort((x, y) => x.c - y.c); if (cands.length > 8) cands.pop(); }
+    }
+    await new Promise(r => setTimeout(r)); // 화면이 멈추지 않게
+  }
+  // 2) 좋은 후보 몇 개를 조금씩 움직여 보며 다듬기 (패턴 탐색), 점 800개
+  const pts = sub(800);
+  const refine = (p0, cap) => {
+    let p = p0.slice(), c = cost(make(p), pts, cap), st = [20, 20, 0.03, 0.03];
+    for (let it = 0; it < 300 && st[0] > 1.5; it++) {
+      let moved = false;
+      for (let k = 0; k < 4; k++) for (const sg of [1, -1]) {
+        const q = p.slice(); q[k] += sg * st[k];
+        const cq = cost(make(q), pts, cap);
+        if (cq < c) { c = cq; p = q; moved = true; }
+      }
+      if (!moved) st = st.map(v => v / 2);
+    }
+    return { p, c };
+  };
+  // 선이 짧거나 단순하면 비슷하게 맞는 자리가 여럿일 수 있어서, 가장 잘 맞는 것과 거의 같게 맞는 후보 중에서는
+  // 대략 맞춘 위치에서 덜 바뀐 쪽 (크기 10%·회전 5°·이동 200 m를 같은 무게로)
+  const change = (p) => Math.abs(p[2]) / 0.1 + Math.abs(p[3]) / 0.087 + Math.hypot(p[0], p[1]) / 200;
+  const fits = cands.concat([{ p: [0, 0, 0, 0] }]).map(cd => refine(refine(cd.p, 40).p, 15));
+  const minC = Math.min(...fits.map(f => f.c));
+  const fit = fits.filter(f => f.c <= minC * 1.2 + 0.5).sort((x, y) => change(x.p) - change(y.p))[0];
+  const T = make(fit.p);
+  // 처음 대략 맞춘 것보다 크기가 너무 달라지거나 많이 돌아가면 믿지 않음
+  if (Math.abs(fit.p[2]) > Math.log(1.6) || Math.abs(fit.p[3]) > 0.5) return { ...T0, score: 0 };
+  let ok = 0; for (const q of src) if (distAt(ap(T, q)) < 20 * U) ok++;
+  return { ...T, score: ok / src.length };
+}
 $('georefCancel').onclick = () => { if (extract) endExtract(); else endGeoref(); };
-$('mapBannerCancel').onclick = () => { endGeoref(); };
+$('mapBannerCancel').onclick = () => { if (rough) endRough(); else endGeoref(); };
+$('preciseLink').onclick = (e) => { e.preventDefault(); if (photo) startGeoref({ src: photo.src, w: photo.w, h: photo.h, opacity: photo.opacity }); else $('photoBtn').click(); };
 $('gzIn').onclick = () => { gZoom = Math.min(gZoom * 1.6, 8); $('georefInner').style.width = gZoom * 100 + '%'; };
 $('gzOut').onclick = () => { gZoom = Math.max(gZoom / 1.6, 1); $('georefInner').style.width = gZoom * 100 + '%'; };
 $('photoOpacity').oninput = (e) => { if (!photo) return; photo.opacity = e.target.value / 100; if (photoEl) photoEl.style.opacity = photo.opacity; };
 $('photoOpacity').onchange = savePhoto;
 $('photoHide').onclick = () => { if (!photo) return; photo.hidden = !photo.hidden; showPhoto(); savePhoto(); };
-$('photoRealign').onclick = () => { if (photo) startGeoref({ src: photo.src, w: photo.w, h: photo.h, opacity: photo.opacity }); };
+$('photoRealign').onclick = () => { if (photo) startRough({ src: photo.src, w: photo.w, h: photo.h, opacity: photo.opacity }); };
 $('photoDrop').onclick = () => {
   if (!photo || !confirm('겹친 사진을 지울까요?')) return;
   photo = null; showPhoto(); savePhoto();
