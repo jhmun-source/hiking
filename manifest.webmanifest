@@ -21,7 +21,7 @@
       "files": [
         {
           "name": "gpx",
-          "accept": [".gpx", ".kml", ".kmz", ".tcx", ".fit", "application/gpx+xml", "application/gpx", "application/vnd.google-earth.kml+xml", "application/vnd.google-earth.kmz", "application/vnd.garmin.tcx+xml", "application/vnd.ant.fit", "application/xml", "text/xml", "application/octet-stream"]
+          "accept": ["image/*", ".png", ".jpg", ".jpeg", ".webp", ".gpx", ".kml", ".kmz", ".tcx", ".fit", "application/gpx+xml", "application/gpx", "application/vnd.google-earth.kml+xml", "application/vnd.google-earth.kmz", "application/vnd.garmin.tcx+xml", "application/vnd.ant.fit", "application/xml", "text/xml", "application/octet-stream"]
         }
       ]
     }
