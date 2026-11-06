@@ -95,7 +95,7 @@
   h2 { font-size: 12px; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
   .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
   .hint a { color: var(--accent); font-weight: 600; } /* 어두운 화면에서 기본 파란 링크는 안 보임 */
-  input[type=text], input[type=password] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
+  input[type=text], input[type=password], input[type=url] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
   button.btn { font: inherit; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
   button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   button.btn:disabled { opacity: .45; }
@@ -440,6 +440,10 @@
         <button class="btn" id="photoBtn">지도 캡처 불러오기</button>
         <input type="file" id="photoFile" accept="image/*" hidden>
       </div>
+      <div class="row">
+        <input id="ramblrLink" type="url" inputmode="url" placeholder="램블러 링크 붙여넣기" style="flex:1;min-width:0">
+        <button class="btn" id="ramblrLinkBtn">링크로 열기</button>
+      </div>
       <div id="photoCtl" hidden>
         <div class="row"><button class="btn primary" id="extractBtn">사진 속 코스 선 자동으로 따라 그리기</button></div>
         <label class="chk" style="margin-top:6px">투명도 <input type="range" id="photoOpacity" min="10" max="100" value="60" style="flex:1"></label>
@@ -450,7 +454,7 @@
         </div>
       </div>
       <p class="hint">램블러·블로그의 코스 지도 캡처를 지도에 겹쳐 보면서 코스를 찍을 수 있어요.<br>
-        ① 먼저 이 앱 지도를 그 산이 화면에 들어오게 옮기고 "램블러에서 찾기"를 누르면, 램블러에서 그 산 트립이 검색돼요.<br>
+        ① 먼저 이 앱 지도를 그 산이 화면에 들어오게 옮기고 "램블러에서 찾기"를 누르면, 램블러에서 그 산 트립이 검색돼요. 블로그·카톡 등에서 받은 램블러 트립 링크가 있으면 붙여 넣고 "링크로 열기"를 누르면 그 트립 지도가 바로 열려요.<br>
         ② 트립을 열고 지도의 "자세히 보기"로 코스가 화면에 차게 한 뒤 캡처하세요. 버튼·깃발이 같이 찍혀도 괜찮고, "마커숨기기"를 누르면 더 잘 찾아요.<br>
         ③ 이 앱으로 돌아와 "지도 캡처 불러오기"로 캡처를 고르고 코스 선을 한 번 누르면, ①에서 보던 범위 안에서 위치와 크기를 자동으로 찾아 겹쳐요. 설치한 앱이면 캡처 화면의 공유 → 코스메이커로 보내도 돼요.<br>
         자동으로 못 찾으면 사진이 반투명하게 뜨니 지도를 움직여 대략 겹친 뒤 코스 선을 다시 누르세요. 그래도 안 맞으면 <a href="#" id="preciseLink">기준점 2개로 정확히 맞추기</a>. 램블러 플러스 회원이면 트립의 "GPX 내려받기" 파일을 위 "코스 파일 불러오기"로 여는 게 가장 정확해요.</p>
@@ -478,7 +482,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-06c · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-06d · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -2061,6 +2065,26 @@ async function peakNear(c, b) {
   peaks.sort((p, q) => (/산$/.test(q.n) - /산$/.test(p.n)) || p.d - q.d);
   return peaks[0]?.n || '';
 }
+// 램블러 트립 링크(블로그·카톡으로 받은 것)를 붙여 넣으면 그 트립의 큰 지도 화면을 바로 엶
+// trip_id·trip_uid·/trip/번호가 있으면 휴대폰용 지도 화면으로, 짧은 링크(rblr.co 등)는 그대로
+function ramblrTripUrl(text) {
+  const t = (text || '').trim(); if (!t) return null;
+  const id = t.match(/trip_u?id=(\d+)/)?.[1] || t.match(/\/trips?\/(?:\d+\/)?(\d{5,})/)?.[1] || (/^\d{5,}$/.test(t) ? t : null)
+    || (/ramblr|rblr/i.test(t) ? t.match(/\d{6,}/)?.[0] : null);
+  if (id) return `https://m.ramblr.com/mobile/explore#pg=map&page=map&trip_id=${id}`;
+  const u = t.match(/https?:\/\/[^\s<>"']+/)?.[0];
+  return u && /ramblr|rblr/i.test(u) ? u : null;
+}
+$('ramblrLinkBtn').onclick = () => {
+  const url = ramblrTripUrl($('ramblrLink').value);
+  if (!url) { toast('램블러 트립 링크가 아니에요. 램블러 앱·사이트에서 공유한 주소를 붙여 넣어 주세요.'); return; }
+  // 캡처 위치는 지금 보이는 지도 범위에서 찾으니, 그 산이 화면에 들어와 있어야 함
+  const b = map.getBounds();
+  store.set('locArea', JSON.stringify({ t: Date.now(), b: [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()] }));
+  window.open(url, '_blank', 'noopener');
+  $('ramblrLink').value = '';
+};
+$('ramblrLink').onkeydown = (e) => { if (e.key === 'Enter') $('ramblrLinkBtn').click(); };
 // 캡처 위치를 찾을 범위: 6시간 안에 램블러를 열었으면 그때 보던 범위, 아니면 지금 보이는 지도
 function searchArea() {
   try { const a = JSON.parse(store.get('locArea') || 'null'); if (a && Date.now() - a.t < 6 * 3600e3) return L.latLngBounds([a.b[0], a.b[1]], [a.b[2], a.b[3]]); } catch {}
