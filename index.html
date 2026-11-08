@@ -156,6 +156,9 @@
   .eta td:last-child { text-align: right; white-space: nowrap; color: var(--muted, #888); }
   .eta tr.warn td { color: var(--danger); }
   .plan-out .sub { color: var(--muted); font-size: 12px; }
+  .speed-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 8px; font-size: 14px; }
+  .speed-row small { color: var(--muted); }
+  .speed-row input { width: 64px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; text-align: center; }
   .slope-key { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
   .slope-key i { display: inline-block; width: 10px; height: 4px; border-radius: 2px; margin: 0 2px 2px 4px; vertical-align: middle; }
   /* GPS 따라가기: 남은 거리 / 코스 이탈 */
@@ -349,6 +352,12 @@
       </div>
       <label class="chk" style="padding:2px 0;white-space:nowrap"><input type="checkbox" id="slopeToggle"> 경사도 색
         <span class="slope-key"><i style="background:#3a9d4a"></i>완만 <i style="background:#e0b400"></i>보통 <i style="background:#ef7d1a"></i>가파름 <i style="background:#c62828"></i>매우</span></label>
+      <div class="speed-row">
+        <span>내 속도 <small>(평지)</small></span>
+        <label>등산 <input type="number" id="hikeKmh" inputmode="decimal" step="0.1" min="1" max="8"> km/h</label>
+        <label>러닝 <input type="text" id="runPace" inputmode="numeric" placeholder="6:00"> /km</label>
+      </div>
+      <p class="hint" style="margin-top:2px">예상 시간은 이 속도로 계산해요 (쉬는 시간 빼고). 오르막·가파른 내리막은 경사만큼 느려지게 셈해요. 등산로로 이은 코스는 등산, 러닝 길로 이은 코스는 러닝 속도를 써요.</p>
       <h2>코스 이름</h2>
       <input type="text" id="routeName" placeholder="예: 금정산 범어사-고당봉">
       <div class="row">
@@ -487,7 +496,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-07e · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-08a · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -1217,7 +1226,11 @@ function fullTrack() {
   return pts;
 }
 
-function trackStats(pts) {
+// 내 속도 (평지 기준): 등산은 걷는 속도 km/h, 러닝은 페이스(1 km에 몇 초). 경사에 따라 Tobler 식 비율로 느려짐
+// 등산 기본 4.3 km/h는 예전 계산(Tobler × 0.85)과 같은 값
+let hikeKmh = +store.get('hikeKmh') || 4.3, runPace = +store.get('runPace') || 360;
+function trackStats(pts, kind = courseKind()) {
+  const flat = kind === '러닝' ? 3600 / runPace : hikeKmh;
   let dist = 0, up = 0, down = 0, hours = 0, max = -Infinity, min = Infinity;
   const cum = [0], cumH = [0]; // 지점별 누적 거리·누적 시간 (정상 도착 시각 계산용)
   for (let i = 1; i < pts.length; i++) {
@@ -1226,7 +1239,7 @@ function trackStats(pts) {
     const e0 = pts[i - 1][2], e1 = pts[i][2];
     if (d > 0) {
       const slope = (e0 != null && e1 != null) ? (e1 - e0) / d : 0;
-      const kmh = 6 * Math.exp(-3.5 * Math.abs(slope + 0.05)) * 0.85; // Tobler, 산길 보정
+      const kmh = flat * Math.exp(-3.5 * (Math.abs(slope + 0.05) - 0.05)); // Tobler: 평지(약간 내리막)가 가장 빠르고 경사가 셀수록 느려짐
       hours += (d / 1000) / Math.max(kmh, 0.5);
     }
     cumH.push(hours);
@@ -1258,6 +1271,21 @@ function slopes(pts, cum) {
   return out;
 }
 
+// 내 속도 입력: 등산 km/h, 러닝 "분:초" 페이스 ("6"만 쓰면 6:00)
+const fmtPace = (sec) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+$('hikeKmh').value = hikeKmh; $('runPace').value = fmtPace(runPace);
+function speedChanged() { render(); if (typeof updatePlan === 'function') updatePlan(); }
+$('hikeKmh').onchange = () => {
+  const v = parseFloat($('hikeKmh').value);
+  if (v >= 1 && v <= 8) { hikeKmh = v; store.set('hikeKmh', v); speedChanged(); } else { toast('등산 속도는 1~8 km/h로 넣어 주세요'); }
+  $('hikeKmh').value = hikeKmh;
+};
+$('runPace').onchange = () => {
+  const m = $('runPace').value.trim().match(/^(\d{1,2})(?:[:'분 ]+(\d{1,2}))?/);
+  const sec = m ? +m[1] * 60 + (+m[2] || 0) : NaN;
+  if (sec >= 150 && sec <= 1200) { runPace = sec; store.set('runPace', sec); speedChanged(); } else { toast('러닝 페이스는 2:30~20:00 사이로 넣어 주세요 (예: 6:00)'); }
+  $('runPace').value = fmtPace(runPace);
+};
 function fmtTime(h) {
   if (!isFinite(h) || h <= 0) return '-';
   const m = Math.round(h * 60);
@@ -3718,7 +3746,7 @@ function renderCourses() {
   if (!mData.courses.length) { ul.innerHTML = '<li class="empty">100대 명산이 아니라 추천 코스는 없어요. 아래 산림청 등산로를 보면서 지도에 직접 그려 보세요.</li>'; return; }
   if (!shown.length) { ul.innerHTML = '<li class="empty">이 산에는 조건에 맞는 코스가 없어요.</li>'; return; }
   shown.forEach(([c, i]) => {
-    const s = trackStats(c.pts);
+    const s = trackStats(c.pts, '등산');
     const li = document.createElement('li');
     li.dataset.i = i;
     li.className = i === mSel ? 'sel' : '';
