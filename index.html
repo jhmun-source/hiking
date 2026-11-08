@@ -496,7 +496,7 @@
         <button class="btn" id="vwApply">적용</button>
       </div>
       <p class="hint">키는 이 기기에만 저장돼요. 브이월드에 이 앱 주소를 서비스 URL로 등록해야 동작해요.</p>
-      <p class="hint">앱 버전 2026-11-08a · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
+      <p class="hint">앱 버전 2026-11-08b · 새 기능이 안 보이면 앱을 완전히 닫았다가 다시 열어 주세요.</p>
       <h2>앱 설치</h2>
       <p class="hint" id="installHint">안드로이드 크롬: 메뉴(⋮) → "홈 화면에 추가" 또는 "앱 설치". 아이폰 사파리: 공유 → "홈 화면에 추가".</p>
       <button class="btn" id="installBtn" hidden>앱 설치하기</button>
@@ -1274,7 +1274,8 @@ function slopes(pts, cum) {
 // 내 속도 입력: 등산 km/h, 러닝 "분:초" 페이스 ("6"만 쓰면 6:00)
 const fmtPace = (sec) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
 $('hikeKmh').value = hikeKmh; $('runPace').value = fmtPace(runPace);
-function speedChanged() { render(); if (typeof updatePlan === 'function') updatePlan(); }
+// 바꾸면 지금 코스·계획 탭·100대 명산 코스 목록·산림청 등산로 구간 시간을 모두 다시 계산
+function speedChanged() { render(); updatePlan(); if (mData?.courses?.length) renderCourses(); if (fData) drawForest(); }
 $('hikeKmh').onchange = () => {
   const v = parseFloat($('hikeKmh').value);
   if (v >= 1 && v <= 8) { hikeKmh = v; store.set('hikeKmh', v); speedChanged(); } else { toast('등산 속도는 1~8 km/h로 넣어 주세요'); }
@@ -3752,7 +3753,7 @@ function renderCourses() {
     li.className = i === mSel ? 'sel' : '';
     li.innerHTML = '<span class="name"><span></span><small></small></span><button class="go">이 코스로</button>';
     li.querySelector('.name > span').textContent = c.name;
-    li.querySelector('small').textContent = `${(c.dist / 1000).toFixed(1)} km · 오르막 ${c.up} m · 약 ${fmtTime(s.hours)}`;
+    li.querySelector('small').textContent = `${(c.dist / 1000).toFixed(1)} km · 오르막 ${c.up} m · 약 ${fmtTime(s.hours)}${hikeKmh !== 4.3 ? ' (내 속도)' : ''}`;
     li.onclick = () => selectCourse(i);
     li.querySelector('.go').onclick = (e) => { e.stopPropagation(); useCourse(i); };
     ul.appendChild(li);
@@ -3817,6 +3818,8 @@ function fPopup(ll, rows) {
   L.popup().setLatLng(ll).setContent(div).openOn(map);
 }
 // 지점 추가가 켜져 있으면 선·점을 눌러도 그대로 지점이 찍히고(아래 지도로 넘김), 꺼져 있을 때만 정보를 보여 줌
+// 산림청 구간 시간(보통 걸음 기준)을 내 등산 속도에 맞게: 기본 4.3 km/h 대비 비율만큼
+const myMin = (m) => Math.max(1, Math.round(m * 4.3 / hikeKmh));
 function fClick(rows) { return (e) => { if (editing || georef) return; L.DomEvent.stop(e); fPopup(e.latlng, rows); }; }
 function drawForest() {
   fLayer.clearLayers();
@@ -3824,7 +3827,7 @@ function drawForest() {
   for (const s of fData.segs) {
     const [g, color] = F_DIFF[s.g] || ['', '#5b6f8a'];
     const rows = [`산림청 등산로 구간${g ? ` · 난이도 ${g}` : ''}`, `${s.d >= 1000 ? (s.d / 1000).toFixed(1) + ' km' : s.d + ' m'}`
-      + (s.u || s.w ? ` · 오를 때 약 ${s.u}분 · 내려올 때 약 ${s.w}분` : '')];
+      + (s.u || s.w ? ` · 오를 때 약 ${myMin(s.u)}분 · 내려올 때 약 ${myMin(s.w)}분${hikeKmh !== 4.3 ? ' (내 속도 기준)' : ''}` : '')];
     L.polyline(s.p, { color, weight: 4, opacity: 0.85 }).on('click', fClick(rows)).addTo(fLayer);
   }
   for (const m of fData.marks) {
